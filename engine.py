@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from enum import Enum
 
+
 # Board is a 19 x 19. We will store this as a bitboard using u64 ints.
 # This requires 7 u64's to store occupancies for each player. 
 ROWS = 9
@@ -15,11 +16,10 @@ class State(Enum):
     Draw = 3
 
    
-    
 class GameState:
     """
     User Guide:
-    Defines a lean Pente Board State for an MCTS Interface.
+    Defines a lean Pente Board State for an Alphazero style Interface.
     We implement the board using bitboards to minimize memory footprint.
     The Action space |A| is set(list) of ROWS*COLS elements, one for each location.
 
@@ -38,7 +38,36 @@ class GameState:
         self.is_white_ = True # True for whites move, False for blacks move.
         self.game_state_ = State.Running 
 
-    
+    def to_tensor(self):
+        """
+        Returns a tensor t with dimension 4 x ROWS x COLS representing the board state for training.
+        This operation is lossy.
+        T[1] is a ROWS x COLS binary array for the piece occupancies of the active player
+        T[2] is a ROWS x COLS binary array for the piece occupancies of the inactive player
+        T[3] is a ROWS x COLS array of identical numbers equal to the active players number of captures
+        T[4] is a ROWS x COLS array of identical numbers equal to the inactive players number of captures
+        
+        Notes:
+        We dont need to explicitly pass color information. Due to the move symettry of pente, we can instead encode this
+            in the field orderings as active and inacvtive player.
+        Layers 3 and 4 may seem wasteful. In practice, the first layers of the network will be convolutional.
+        By uniformly setting the entire layer, we guarantee this information passes uniformly to subsequent layers of the network.
+        Furthermore, convolutional layers will not suffer heavy computations due to this "redundant" information so it isnt actually that bad.
+        """ 
+        t = np.array((4, ROWS, COLS), dtype=np.float32)
+        if self.is_white_:
+            t[0, :, :] = self.w_occs_
+            t[1, :, :] = self.b_occs_
+            t[2, :, :] = self.w_caps_
+            t[3, :, :] = self.b_caps_
+            return t
+        
+        t[0, :, :] = self.b_occs_
+        t[1, :, :] = self.w_occs_
+        t[2, :, :] = self.b_caps_
+        t[3, :, :] = self.w_caps_
+        return t
+
     def apply_action(self, action_id):
         """
         action_id MUST be a legal move.
@@ -63,6 +92,8 @@ class GameState:
         Returns mask of the action space A as array of type np.uint8. Has |A| elements.
         Each element is 0 or 1. 0 means that action is illegal. 1 means legal
         """
+        if self.is_terminal():
+            return np.array([], dtype=np.uint8)
         return np.unpackbits((~self.w_occs_ | ~self.b_occs_).view(np.uint8))
 
 
@@ -90,6 +121,7 @@ class GameState:
             self.apply_action(action)
             return True
         return False    
+
 
     def is_white(self):
         return self.is_white_
