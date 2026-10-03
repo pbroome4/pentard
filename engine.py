@@ -1,56 +1,118 @@
 from dataclasses import dataclass
 import numpy as np
-
+from enum import Enum
 
 # Board is a 19 x 19. We will store this as a bitboard using u64 ints.
 # This requires 7 u64's to store occupancies for each player. 
-ROWS = 19      
-COLS = 19       
-BRD_LEN = 7
+ROWS = 9
+COLS = 9       
+BRD_LEN = int(np.ceil(ROWS*COLS/64))
 
+class State(Enum):
+    Running = 0
+    White = 1
+    Black = 2
+    Draw = 3
 
-
-
-class BoardState:
-    def __init__(self):
-        self.w_occs = np.zeros((ROWS,COLS), dtype=np.uint64)
-        self.w_caps = np.uint8(0)
-        self.b_occs = np.zeros((ROWS, COLS), dtype=np.uint64)
-        self.b_caps = np.uint8(0)
-        self.game_over: bool = False
-
-
-    def play_safe(self, row:np.uint8, col:np.uint8, is_white:bool):
-        chunk, chunk_rem = BoardState._coord_2_chunk(row, col)
-        if  not self._is_occ_chunk(chunk, chunk_rem, is_white = True) \
-                and not self._is_occ_chunk(chunk, chunk_rem, is_white = False):
-            self.play(row, col, is_white)
-            return True
-        return False
+   
     
+class GameState:
+    """
+    User Guide:
+    Defines a lean Pente Board State for an MCTS Interface.
+    We implement the board using bitboards to minimize memory footprint.
+    The Action space |A| is set(list) of ROWS*COLS elements, one for each location.
+
+      
+    Developer Guide:
+    Action ID's start at 0 in the top left corner and count up across columns and then across the rows.
+    The board is chunked down into 64 bit occupancy bit masks to minimize memory footprint and hopefully improve performance.
+    If this proves fruitful, this should probably get ported to a faster language like c/c++/rust
+    """
+    def __init__(self):
+        self.w_occs_ = np.zeros((ROWS,COLS), dtype=np.uint64)
+        self.w_caps_ = np.uint8(0)
+        self.b_occs_ = np.zeros((ROWS, COLS), dtype=np.uint64)
+        self.b_caps_ = np.uint8(0)
+        self.num_pieces = 0 # num pieces currently on the board
+        self.is_white_ = True # True for whites move, False for blacks move.
+        self.game_state_ = State.Running 
+
+    
+    def apply_action(self, action_id):
+        """
+        action_id MUST be a legal move.
+        For performance reasons, we dont implement a safegaurd that checks this.
+        """
+        chunk, chunk_rem = _action_id_2_chunk(action_id)
+        self._fill(chunk, chunk_rem, self.is_white_)
+        self.num_pieces += 1
+        self._update_captures(row, col)
+        if self._caps() == 5 or self._is_con5(row, col):
+            if self.is_white_:
+                self.game_state_= State.White
+            else:
+                self.game_state_ = State.Black
+        elif self.num_pieces == ROWS*COLS:
+            self.game_state_ = State.Draw
+        self.is_white_ = not self.is_white_
+
+
+    def get_legal_moves(self):
+        """
+        Returns mask of the action space A as array of type np.uint8. Has |A| elements.
+        Each element is 0 or 1. 0 means that action is illegal. 1 means legal
+        """
+        return np.unpackbits((~self.w_occs_ | ~self.b_occs_).view(np.uint8))
+
+
+    def is_terminal(self):
+        return self.game_state_ != State.Running
+    
+
+    def get_terminal_value(self, is_white):
+        """
+        Assumes is_terminal() == True.
+        Returns the score {-1, 0, 1} relative to the winner.
+        -1 if provided provided player lost. 0 for draw. 1 for win
+        """
         
-    def play(self, row:np.uint8, col:np.uint8, is_white:bool):
-        chunk, chunk_rem = BoardState._coord_2_chunk(row, col)
-        self._fill(chunk, chunk_rem, is_white)
-        self._update_captures(row, col, is_white)
-        is_con5 = self._is_con5(row, col, is_white)
-        if self.b_caps == 5 or self.w_caps == 5 or is_con5:
-            self.game_over = True
+
+    def play(self, row:np.uint8, col:np.uint8):
+        if not self.is_terminal():
+            self.apply_action(_coord_2_action_id(row,col))
 
 
-    def is_game_over(self):
-        return self.game_over
+    def play_safe(self, row:np.uint8, col:np.uint8) -> bool:
+        """ checks if move is legal. Returns True on success, false on failure."""
+        action = _coord_2_action_id(row,col)
+        if not self.is_terminal() and self.get_legal_moves()[action]:
+            self.apply_action(action)
+            return True
+        return False    
 
+    def is_white(self):
+        return self.is_white_
 
-    def _is_con5(self, row, col, is_white):
+    def _caps(self):
+        if self.is_white_:
+            return self.w_caps_
+        return self.b_caps_
+
+    def _occs(self):
+        if self.is_white_:
+            return self.w_occs_
+        return self.b_occs_
+
+    def _is_con5(self, row, col):
         count = 1
         for i in range(1, 5): # Vertical
-            if self._coord_inbounds(row-i, col) and self._is_occ_coord(row-i, col, is_white):
+            if _coord_inbounds(row-i, col) and self._is_occ_coord(row-i, col, self.is_white_):
                 count += 1
             else:
                 break
         for i in range(1, 5):   
-            if self._coord_inbounds(row+i, col) and self._is_occ_coord(row+i, col, is_white):
+            if _coord_inbounds(row+i, col) and self._is_occ_coord(row+i, col, self.is_white_):
                 count += 1
             else:
                 break
@@ -59,27 +121,26 @@ class BoardState:
         
         count = 1
         for i in range(1, 5): # Horizontal
-            if self._coord_inbounds(row, col-i) and self._is_occ_coord(row, col-i, is_white):
+            if _coord_inbounds(row, col-i) and self._is_occ_coord(row, col-i, self.is_white_):
                 count += 1
             else:
                 break
         for i in range(1, 5):   
-            if self._coord_inbounds(row, col+i) and self._is_occ_coord(row, col+i, is_white):
+            if _coord_inbounds(row, col+i) and self._is_occ_coord(row, col+i, self.is_white_):
                 count += 1
             else:
                 break
-        print(f"horiz count: {count}")
         if count >= 5:
             return True
         
         count = 1
         for i in range(1, 5): # Diag \
-            if self._coord_inbounds(row-i, col-i) and self._is_occ_coord(row-i, col-i, is_white):
+            if _coord_inbounds(row-i, col-i) and self._is_occ_coord(row-i, col-i, self.is_white_):
                 count += 1
             else:
                 break
         for i in range(1, 5):   
-            if self._coord_inbounds(row+i, col+i) and self._is_occ_coord(row+i, col+i, is_white):
+            if _coord_inbounds(row+i, col+i) and self._is_occ_coord(row+i, col+i, self.is_white_):
                 count += 1
             else:
                 break
@@ -88,12 +149,12 @@ class BoardState:
         
         count = 1
         for i in range(1, 4): # Diag /
-            if self._coord_inbounds(row-i, col+i) and self._is_occ_coord(row-i, col+i, is_white):
+            if _coord_inbounds(row-i, col+i) and self._is_occ_coord(row-i, col+i, self.is_white_):
                 count += 1
             else:
                 break
         for i in range(1, 4):   
-            if self._coord_inbounds(row+i, col-i) and self._is_occ_coord(row+i, col-i, is_white):
+            if _coord_inbounds(row+i, col-i) and self._is_occ_coord(row+i, col-i, self.is_white_):
                 count += 1
             else:
                 break
@@ -102,111 +163,120 @@ class BoardState:
         return False
 
 
-    def _update_captures(self, row, col, is_white):
+    def _update_captures(self, row, col):
         if row >= 3:    # Vertical down
-            if self._is_occ_coord(row-3, col, is_white) \
-                    and self._is_occ_coord(row-2, col, not is_white) \
-                    and self._is_occ_coord(row-1, col, not is_white):
-                self._del_coord(row-2, col, not is_white)
-                self._del_coord(row-1, col, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row-3, col, self.is_white_) \
+                    and self._is_occ_coord(row-2, col, not self.is_white_) \
+                    and self._is_occ_coord(row-1, col, not self.is_white_):
+                self._del_coord(row-2, col, not self.is_white_)
+                self._del_coord(row-1, col, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
         
         if row <= ROWS-4: # Vertical up
-            if self._is_occ_coord(row+3, col, is_white) \
-                    and self._is_occ_coord(row+2, col, not is_white) \
-                    and self._is_occ_coord(row+1, col, not is_white):
-                self._del_coord(row+2, col, not is_white)
-                self._del_coord(row+1, col, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row+3, col, self.is_white_) \
+                    and self._is_occ_coord(row+2, col, not self.is_white_) \
+                    and self._is_occ_coord(row+1, col, not self.is_white_):
+                self._del_coord(row+2, col, not self.is_white_)
+                self._del_coord(row+1, col, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
 
         if col >= 3: # Horizontal left
-            if self._is_occ_coord(row, col-3, is_white) \
-                    and self._is_occ_coord(row, col-2, not is_white) \
-                    and self._is_occ_coord(row, col-1, not is_white):
-                self._del_coord(row, col-2, not is_white)
-                self._del_coord(row, col-1, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row, col-3, self.is_white_) \
+                    and self._is_occ_coord(row, col-2, not self.is_white_) \
+                    and self._is_occ_coord(row, col-1, not self.is_white_):
+                self._del_coord(row, col-2, not self.is_white_)
+                self._del_coord(row, col-1, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
         
         if col <= COLS-4: # Horizontal right
-            if self._is_occ_coord(row, col+3, is_white) \
-                    and self._is_occ_coord(row, col+2, not is_white) \
-                    and self._is_occ_coord(row, col+1, not is_white):
-                self._del_coord(row, col+2, not is_white)
-                self._del_coord(row, col+1, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row, col+3, self.is_white_) \
+                    and self._is_occ_coord(row, col+2, not self.is_white_) \
+                    and self._is_occ_coord(row, col+1, not self.is_white_):
+                self._del_coord(row, col+2, not self.is_white_)
+                self._del_coord(row, col+1, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
         
         if row >= 3 and col >= 3: # Diagonal top-left
-            if self._is_occ_coord(row-3, col-3, is_white) \
-                    and self._is_occ_coord(row-2, col-2, not is_white) \
-                    and self._is_occ_coord(row-1, col-1, not is_white):
-                self._del_coord(row-2, col-2, not is_white)
-                self._del_coord(row-1, col-1, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row-3, col-3, self.is_white_) \
+                    and self._is_occ_coord(row-2, col-2, not self.is_white_) \
+                    and self._is_occ_coord(row-1, col-1, not self.is_white_):
+                self._del_coord(row-2, col-2, not self.is_white_)
+                self._del_coord(row-1, col-1, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
         
         if row>= 3 and col <= COLS-4: # Diagonal top-right
-            if self._is_occ_coord(row-3, col+3, is_white) \
-                    and self._is_occ_coord(row-2, col+2, not is_white) \
-                    and self._is_occ_coord(row-1, col+1, not is_white):
-                self._del_coord(row-2, col+2, not is_white)
-                self._del_coord(row-1, col+1, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row-3, col+3, self.is_white_) \
+                    and self._is_occ_coord(row-2, col+2, not self.is_white_) \
+                    and self._is_occ_coord(row-1, col+1, not self.is_white_):
+                self._del_coord(row-2, col+2, not self.is_white_)
+                self._del_coord(row-1, col+1, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
         
         if row <= ROWS-4 and col >= 3: # Diagonal bottom-left
-            if self._is_occ_coord(row+3, col-3, is_white) \
-                    and self._is_occ_coord(row+2, col-2, not is_white) \
-                    and self._is_occ_coord(row+1, col-1, not is_white):
-                self._del_coord(row+2, col-2, not is_white)
-                self._del_coord(row+1, col-1, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row+3, col-3, self.is_white_) \
+                    and self._is_occ_coord(row+2, col-2, not self.is_white_) \
+                    and self._is_occ_coord(row+1, col-1, not self.is_white_):
+                self._del_coord(row+2, col-2, not self.is_white_)
+                self._del_coord(row+1, col-1, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
 
         if row <= ROWS-4 and col <= COLS-4:     # Diagonal bottom-right
-            if self._is_occ_coord(row+3, col+3, is_white) \
-                    and self._is_occ_coord(row+2, col+2, not is_white) \
-                    and self._is_occ_coord(row+1, col+1, not is_white):
-                self._del_coord(row+2, col+2, not is_white)
-                self._del_coord(row+1, col+1, not is_white)
-                self._adj_cap(1, is_white) 
+            if self._is_occ_coord(row+3, col+3, self.is_white_) \
+                    and self._is_occ_coord(row+2, col+2, not self.is_white_) \
+                    and self._is_occ_coord(row+1, col+1, not self.is_white_):
+                self._del_coord(row+2, col+2, not self.is_white_)
+                self._del_coord(row+1, col+1, not self.is_white_)
+                self.num_pieces -=2
+                self._adj_cap(1, self.is_white_) 
 
                 
     def _adj_cap(self, delta:int, is_white):
+        """ Adjust the tally for the number of captures """
         if is_white:
-            self.w_caps += delta
-            return self.w_caps
+            self.w_caps_ += delta
+            return self.w_caps_
         else:
-            self.b_caps += delta
-            self.b_caps
+            self.b_caps_ += delta
+            self.b_caps_
 
     def _fill(self, chunk, chunk_rem, is_white:bool):
         if is_white:
-            self.w_occs[chunk] |=  np.uint64(1) << chunk_rem
+            self.w_occs_[chunk] |=  np.uint64(1) << chunk_rem
         else:
-            self.b_occs[chunk] |=  np.uint64(1) << chunk_rem
+            self.b_occs_[chunk] |=  np.uint64(1) << chunk_rem
 
 
     def _del_coord(self, row, col, is_white):
-        chunk, chunk_rem = self._coord_2_chunk(row, col)
+        """ Clears occupancy bit """
+        chunk, chunk_rem = _coord_2_chunk(row, col)
         self._del_chunk(chunk, chunk_rem, is_white)
 
 
     def _del_chunk(self, chunk, chunk_rem, is_white:bool):
-            print(f"deleting chunk:{chunk}  chunk_rem:{chunk_rem}")
             if is_white:
-                self.w_occs[chunk] &=  ~(np.uint64(1) << chunk_rem)
+                self.w_occs_[chunk] &=  ~(np.uint64(1) << chunk_rem)
             else:
-                self.b_occs[chunk] &=  ~(np.uint64(1) << chunk_rem)
+                self.b_occs_[chunk] &=  ~(np.uint64(1) << chunk_rem)
     
             
     def _is_occ_coord(self, row, col, is_white):
-        chunk, chunk_rem = self._coord_2_chunk(row, col)
+        chunk, chunk_rem = _coord_2_chunk(row, col)
         return self._is_occ_chunk(chunk, chunk_rem, is_white)
 
 
     def _is_occ_chunk(self, chunk, chunk_rem, is_white:bool) -> bool:
         if is_white:
-            x = (self.w_occs[chunk] >> chunk_rem) & np.uint64(1)
+            x = (self.w_occs_[chunk] >> chunk_rem) & np.uint64(1)
             return x[0]
         else:
-            x = (self.b_occs[chunk] >> chunk_rem) & np.uint64(1)
+            x = (self.b_occs_[chunk] >> chunk_rem) & np.uint64(1)
             return x[0]
 
     def __str__(self):
@@ -217,7 +287,7 @@ class BoardState:
         for r in range(0,ROWS):
             s += f"{r:02d} "
             for c in range(0,COLS):
-                chunk, chunk_rem = self._coord_2_chunk(r,c)
+                chunk, chunk_rem = _coord_2_chunk(r,c)
                 if self._is_occ_chunk(chunk, chunk_rem, is_white=True):
                     s += "W  "
                 elif self._is_occ_chunk(chunk, chunk_rem, is_white=False):
@@ -225,46 +295,58 @@ class BoardState:
                 else:
                     s += "•  "
             s += "\n"
-        s += f"White Captures: {self.w_caps}      Black Captures: {self.b_caps}"
+        s += f"White Captures: {self.w_caps_}      Black Captures: {self.b_caps_}"
         return s
         
 
-    @staticmethod
-    def _coord_2_chunk(row: np.uint8, col:np.uint8):
-        bit_pos:np.uint8 = row*COLS + col
-        occ_chunk = bit_pos // 64
-        occ_chunk_rem = bit_pos - occ_chunk * 64
-        return (occ_chunk, occ_chunk_rem)
+    
+def _coord_2_chunk(row: np.uint8, col:np.uint8):
+    action = _coord_2_action_id(row,col)
+    return _action_id_2_chunk(action)
 
-    @staticmethod
-    def _chunk_2_coord(chunk, chunk_rem):
-        bit_pos = chunk * 64 + chunk_rem
-        row = bit_pos / COLS
-        col = bit_pos - row*COLS
-        return (row,col)
 
-    @staticmethod
-    def _coord_inbounds(row, col):
-        return row >= 0 and row < ROWS and col >= 0 and col < COLS
+def _action_id_2_chunk(id):
+    """
+    id describes board location as index position on the vectorized board.
+
+    Returns the chunk, chunk_rem.
+        chunk refers to the index of the u64 bitboard containing the board square.
+        chunk_rem is the bit index in this bit board for this board square.
+    """
+    occ_chunk = id // 64
+    occ_chunk_rem = id - occ_chunk * 64
+    return occ_chunk, occ_chunk_rem
+
+def _coord_2_action_id(row, col):
+    return row*COLS + col
+
+def _chunk_2_coord(chunk, chunk_rem):
+    bit_pos = chunk * 64 + chunk_rem
+    row = bit_pos / COLS
+    col = bit_pos - row*COLS
+    return (row,col)
+
+
+def _coord_inbounds(row, col):
+    return row >= 0 and row < ROWS and col >= 0 and col < COLS
+
 
 if __name__ == "__main__":
-    brd = BoardState()
-    is_white = True
+    brd = GameState()
     while(True):
         print(brd)
         player_str = {True: "White", False:"Black"}
-        user_in = input(f"Enter {player_str[is_white]} move as row, col: ")
+        user_in = input(f"Enter {player_str[brd.is_white()]} move as row, col: ")
         coord = user_in.split(",")
         if len(coord) == 2:
             row = int(coord[0])
             col = int(coord[1])
-            if brd.play_safe(row,col, is_white):
-                if brd.is_game_over():
-                    print(f"Game over. {player_str[is_white]} Win!")
+            if brd.play_safe(row, col):
+                if brd.is_terminal():
+                    print(f"Game over. {player_str[brd.is_white()]} Win!")
                     break
-                is_white = not is_white
             else:
-                print("Invalid move, try agains")
+                print("Invalid move, try again")
                 continue
 
         else:
