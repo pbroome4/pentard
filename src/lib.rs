@@ -5,6 +5,9 @@ pub const ROWS:usize = 9;
 pub const COLS:usize = 9;
 
 
+
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Piece{
@@ -13,8 +16,24 @@ pub enum Piece{
     White = 2,
 }
 
+pub trait GameState{
+    // Get vector of legal actions 
+    fn get_actions(&self) -> Vec<usize>;
 
-pub struct GameState{
+    // Apply an action. action MUST be a legal action.
+    fn apply_action(&self, action: usize);
+
+    // Is the game over
+    fn is_terminal(&self) -> bool;
+
+    // Get the terminal value
+    fn get_terminal_value(&self) -> i32;
+ 
+    // Perform a deep copy of the GameState
+    fn clone(&self) -> Self;     
+}
+
+pub struct PenteState{
     board_: [[Piece; COLS]; ROWS],
     b_caps_: u8, 
     w_caps_: u8,
@@ -22,7 +41,7 @@ pub struct GameState{
     num_pieces_: u8, 
 }
 
-impl GameState{
+impl PenteState{
     pub fn new() -> Self{
         Self{
             board_: [[Piece::Empty; COLS]; ROWS],
@@ -32,9 +51,54 @@ impl GameState{
             num_pieces_: 0,
         }
     }
+
+
+    fn coord_2_action(row: usize, col:usize) -> usize{
+        row*COLS + col
+    }
+
+
+    fn action_2_coord(action: usize) -> (usize, usize){
+        let row = action/COLS;
+        let col = action - row*COLS;
+        (row, col)
+    }
+
+
+    fn play(&mut self, row: usize, col: usize){
+        if self.is_black_{
+            self.board_[row][col] = Piece::Black;
+        }else{
+            self.board_[row][col] = Piece::White;
+        }
+        self.num_pieces_ += 1;
+
+        //action = PenteState.coord_2_action(row, col);
+        //self.apply_action(action);
+    }
 }
 
-impl fmt::Display for GameState {
+impl PenteState{
+    fn get_actions(&self) -> Vec<usize>{
+        let mut v = Vec::with_capacity(ROWS*COLS);
+        for row in 0..ROWS{
+            for col in 0..COLS{
+                if self.board_[row][col] == Piece::Empty{
+                    v.push(PenteState::coord_2_action(row,col));
+                }
+            }
+        }
+        return v;
+    }
+    //fn apply_action(&self, action: usize);
+    //fn is_terminal(&self) -> bool;
+    //fn get_terminal_value(&self) -> isize;
+    //fn clone(&self) -> Self; 
+}
+
+
+
+impl fmt::Display for PenteState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for row in 0..ROWS{
             for col in 0..COLS{
