@@ -30,9 +30,9 @@ class GameState:
     If this proves fruitful, this should probably get ported to a faster language like c/c++/rust
     """
     def __init__(self):
-        self.w_occs_ = np.zeros((ROWS,COLS), dtype=np.uint64)
+        self.w_occs_ = np.zeros((BRD_LEN,), dtype=np.uint64)
         self.w_caps_ = np.uint8(0)
-        self.b_occs_ = np.zeros((ROWS, COLS), dtype=np.uint64)
+        self.b_occs_ = np.zeros((BRD_LEN, ), dtype=np.uint64)
         self.b_caps_ = np.uint8(0)
         self.num_pieces = 0 # num pieces currently on the board
         self.is_white_ = True # True for whites move, False for blacks move.
@@ -94,9 +94,11 @@ class GameState:
         Each element is 0 or 1. 0 means that action is illegal. 1 means legal
         """
         if self.is_terminal():
-            return np.array([], dtype=np.uint8)
-        return np.unpackbits((~self.w_occs_ | ~self.b_occs_).view(np.uint8))
-
+            r = np.array([], dtype=np.uint8)
+        else:
+            l = (~self.w_occs_ & ~self.b_occs_).view(np.uint8)
+            r = np.unpackbits(l, bitorder="little")
+        return r
 
     def is_terminal(self):
         return self.game_state_ != State.Running
@@ -157,6 +159,7 @@ class GameState:
         if self.is_white_:
             return self.w_occs_
         return self.b_occs_
+
 
     def _is_con5(self, row, col):
         count = 1
@@ -328,10 +331,10 @@ class GameState:
     def _is_occ_chunk(self, chunk, chunk_rem, is_white:bool) -> bool:
         if is_white:
             x = (self.w_occs_[chunk] >> chunk_rem) & np.uint64(1)
-            return x[0]
+            return x == 1
         else:
             x = (self.b_occs_[chunk] >> chunk_rem) & np.uint64(1)
-            return x[0]
+            return x == 1
 
     def __str__(self):
         s = "  "
@@ -353,7 +356,7 @@ class GameState:
         return s
         
 def action_space_size()->int:
-    return 19*19
+    return ROWS*COLS
     
 def _coord_2_chunk(row: np.uint8, col:np.uint8):
     action = _coord_2_action_id(row,col)
