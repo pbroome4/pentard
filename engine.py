@@ -107,6 +107,15 @@ class GameState:
         Returns the score {-1, 0, 1} relative to the winner.
         -1 if provided provided player lost. 0 for draw. 1 for win
         """
+        if (self.is_white_ and self.game_state_ == State.White) \
+                or (self.is_black_ and self.game_state_ == State.Black):
+            return 1
+        elif self.game_state_ == State.Draw:
+            return 0
+        else:
+            return -1
+
+
 
     def clone(self):
         """Perform deep copy"""
