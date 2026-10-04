@@ -38,7 +38,10 @@ pub struct PenteState{
     b_caps_: u8, 
     w_caps_: u8,
     is_black_: bool,
-    num_pieces_: u8, 
+    num_pieces_: u8,  // Number of pieces activly on the board.
+                      // Is redundant, since we could loop over board,
+                      // but maintined to minimize computation
+    is_terminal_: bool,
 }
 
 impl PenteState{
@@ -49,14 +52,13 @@ impl PenteState{
             w_caps_:  0,
             is_black_: true,
             num_pieces_: 0,
+            is_terminal_: false,
         }
     }
-
 
     fn coord_2_action(row: usize, col:usize) -> usize{
         row*COLS + col
     }
-
 
     fn action_2_coord(action: usize) -> (usize, usize){
         let row = action/COLS;
@@ -65,19 +67,70 @@ impl PenteState{
     }
 
 
-    pub fn play(&mut self, row: usize, col: usize){
-        let action = PenteState::coord_2_action(row, col);
-        if self.get_actions().contains(&action){
+    pub fn play(&mut self, row: usize, col: usize) -> bool{
+        let action = PenteState::coord_2_action(row,col);
+        if self.is_legal_action(action){
             if self.is_black_{
                 self.board_[row][col] = Piece::Black;
             }else{
                 self.board_[row][col] = Piece::White;
             }
             self.num_pieces_ += 1;
+            self.update_captures(row, col);
+            // check connect 5
             self.is_black_ = !self.is_black_;
+            return true;
         }
+        return false;
         //action = PenteState.coord_2_action(row, col);
         //self.apply_action(action);
+    }
+
+    pub fn is_legal_action(&self, action: usize) -> bool{
+        return self.get_actions().contains(&action);
+    }
+
+    pub fn is_black(&self) -> bool{
+        return self.is_black_;
+    }
+
+    
+    fn update_captures(&mut self, row:usize, col:usize) {
+        let active = self.get_active_piece();
+        let inactive = self.get_inactive_piece();
+        if row >= 3{ // vert up
+            if self.board_[row-3][col] == active 
+                    && self.board_[row-2][col] == inactive
+                    && self.board_[row-1][col] == inactive{
+                self.board_[row-2][col] = Piece::Empty;
+                self.board_[row-1][col] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+                }
+        }
+    }
+    
+    fn add_captures(&mut self, is_black:bool, delta: u8){
+        if is_black{
+            self.b_caps_ += delta;
+        }else{
+            self.w_caps_ += delta;
+        }
+    }
+
+    fn get_active_piece(&self) -> Piece{
+        const PIECE_MAP: [Piece; 2] = [Piece::White, Piece::Black];
+        return PIECE_MAP[self.is_black_ as usize]
+    }
+
+
+    fn get_inactive_piece(&self) -> Piece{
+        const PIECE_MAP: [Piece; 2] = [Piece::Black, Piece::White];
+        return PIECE_MAP[self.is_black_ as usize]
+    }
+
+    pub fn active_plyr_str(&self) -> &str{
+        const PLYR_MAP: [&str; 2] = ["White", "Black"];
+        return PLYR_MAP[self.is_black_ as usize];
     }
 }
 
@@ -94,7 +147,10 @@ impl PenteState{
         return v;
     }
     //fn apply_action(&self, action: usize);
-    //fn is_terminal(&self) -> bool;
+    
+    fn is_terminal(&self) -> bool{
+        return self.is_terminal_;
+    }
     //fn get_terminal_value(&self) -> isize;
     //fn clone(&self) -> Self; 
 }
@@ -120,7 +176,8 @@ impl fmt::Display for PenteState {
                 }
             }
             writeln!(f)?;
-        }
+            }
+        writeln!(f, "Black captures:{}   White Captures{}", self.b_caps_, self.w_caps_)?;
         Ok(())
     }
 }

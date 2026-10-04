@@ -33,12 +33,16 @@ fn read_move() -> Result<(usize, usize), String>{
 
 fn main(){
     let mut brd = pentard::PenteState::new();
-    while true{
+    loop{
         print!("{}", brd);
-        print!("Enter move for player as row, col: ");
+        let player = brd.active_plyr_str();
+        print!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();
         if let Ok((row, col)) = read_move() {
-            brd.play(row, col)
+            if brd.play(row, col){
+            }else{
+                print!("Illegal Move")
+            }
         }else{
             print!("Failed to read move")
         }
