@@ -3,11 +3,64 @@ import numpy as np
 from enum import Enum
 
 
+def fill(brd, chunk, chunk_rem):
+    brd[chunk] |=  np.uint64(1) << chunk_rem
+
+
+def _coord_2_chunk(row: np.uint8, col:np.uint8):
+    action = _coord_2_action_id(row,col)
+    return _action_id_2_chunk(action)
+
+
+def _action_id_2_chunk(id):
+    """
+    id describes board location as index position on the vectorized board.
+
+    Returns the chunk, chunk_rem.
+        chunk refers to the index of the u64 bitboard containing the board square.
+        chunk_rem is the bit index in this bit board for this board square.
+    """
+    occ_chunk = id // 64
+    occ_chunk_rem = id - occ_chunk * 64
+    return occ_chunk, occ_chunk_rem
+
+def action_id_2_coord(id):    
+    row = id // COLS
+    col = id - row*COLS
+    return row, col
+
+def _coord_2_action_id(row, col):
+    return row*COLS + col
+
+def _chunk_2_coord(chunk, chunk_rem):
+    bit_pos = chunk * 64 + chunk_rem
+    row = bit_pos / COLS
+    col = bit_pos - row*COLS
+    return (row,col)
+
+
+def _coord_inbounds(row, col):
+    return row >= 0 and row < ROWS and col >= 0 and col < COLS
+
+
+
+def init_brd_mask():
+    """ Return a bitboard masking valid squares on the board. 0 for invalid squares. 1 for valid squares """
+    brd = np.zeros((BRD_LEN,), dtype=np.uint64)
+    for row in range(ROWS):
+        for col in range(COLS):
+            chunk, chunk_rem = _coord_2_chunk(row, col)
+            fill(brd, chunk, chunk_rem)
+    return brd
+
+
 # Board is a 19 x 19. We will store this as a bitboard using u64 ints.
 # This requires 7 u64's to store occupancies for each player. 
 ROWS = 9
 COLS = 9       
 BRD_LEN = int(np.ceil(ROWS*COLS/64))
+BRD_MASK = init_brd_mask()
+
 
 class State(Enum):
     Running = 0
@@ -96,7 +149,7 @@ class GameState:
         if self.is_terminal():
             r = np.array([], dtype=np.uint8)
         else:
-            l = (~self.w_occs_ & ~self.b_occs_).view(np.uint8)
+            l = (~self.w_occs_ & ~self.b_occs_ & BRD_MASK).view(np.uint8)
             r = np.unpackbits(l, bitorder="little")
         return r
 
@@ -358,40 +411,6 @@ class GameState:
 def action_space_size()->int:
     return ROWS*COLS
     
-def _coord_2_chunk(row: np.uint8, col:np.uint8):
-    action = _coord_2_action_id(row,col)
-    return _action_id_2_chunk(action)
-
-
-def _action_id_2_chunk(id):
-    """
-    id describes board location as index position on the vectorized board.
-
-    Returns the chunk, chunk_rem.
-        chunk refers to the index of the u64 bitboard containing the board square.
-        chunk_rem is the bit index in this bit board for this board square.
-    """
-    occ_chunk = id // 64
-    occ_chunk_rem = id - occ_chunk * 64
-    return occ_chunk, occ_chunk_rem
-
-def action_id_2_coord(id):    
-    row = id // COLS
-    col = id - row*COLS
-    return row, col
-
-def _coord_2_action_id(row, col):
-    return row*COLS + col
-
-def _chunk_2_coord(chunk, chunk_rem):
-    bit_pos = chunk * 64 + chunk_rem
-    row = bit_pos / COLS
-    col = bit_pos - row*COLS
-    return (row,col)
-
-
-def _coord_inbounds(row, col):
-    return row >= 0 and row < ROWS and col >= 0 and col < COLS
 
 
 if __name__ == "__main__":
