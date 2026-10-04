@@ -81,24 +81,6 @@ class Pentard(nn.Module):
         return policy, value
 
 
-class MCTSNode:
-    def __init__(self, parent=None):
-        self.parent = parent
-        self.children = {}   # map action_index -> child node
-        self.n_vists = 0
-        self.val_avg = 0
-        
-
-
-
-def mcts():
-    """ Pure monte carlo tree search(MCTS)"""
-
-
-def mcts_puct():
-    """ Uses predictor upper confidence bounds applied to trees (puct) for monte carlo tree search(MCTS) """
-    pass
-
 
 
 memory = ReplayMemory(10000)
