@@ -103,14 +103,20 @@ impl PenteState{
 
 impl fmt::Display for PenteState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "   ")?;
+        for col in 0..COLS{
+            write!(f, "{:02} ", col)?;
+        }
+        write!(f,"\n")?;
         for row in 0..ROWS{
+            write!(f, "{:02}  ", row)?;
             for col in 0..COLS{
                 if self.board_[row][col] == Piece::Empty{
-                    write!(f, "· ")?;
+                    write!(f, "·  ")?;
                 }else if self.board_[row][col]  == Piece::Black{
-                    write!(f, "B ")?;
+                    write!(f, "B  ")?;
                 }else{
-                    write!(f, "W ")?;
+                    write!(f, "W  ")?;
                 }
             }
             writeln!(f)?;
