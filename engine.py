@@ -107,7 +107,19 @@ class GameState:
         Returns the score {-1, 0, 1} relative to the winner.
         -1 if provided provided player lost. 0 for draw. 1 for win
         """
-        
+
+    def clone(self):
+        """Perform deep copy"""
+        g = GameState()
+        g.w_occs_ = self.w_occs_.copy()
+        g.b_occs_ = self.b_occs_.copy()
+        g.w_caps_ = self.w_caps_.copy()
+        g.b_caps_ = self.b_caps_.copy()
+        g.num_pieces = self.num_pieces
+        g.is_white_ = self.is_white_
+        g.game_state_ = self.game_state_
+        return g
+    
 
     def play(self, row:np.uint8, col:np.uint8):
         if not self.is_terminal():
@@ -330,7 +342,8 @@ class GameState:
         s += f"White Captures: {self.w_caps_}      Black Captures: {self.b_caps_}"
         return s
         
-
+def action_space_size()->int:
+    return 19*19
     
 def _coord_2_chunk(row: np.uint8, col:np.uint8):
     action = _coord_2_action_id(row,col)
