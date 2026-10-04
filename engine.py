@@ -76,6 +76,7 @@ class GameState:
         chunk, chunk_rem = _action_id_2_chunk(action_id)
         self._fill(chunk, chunk_rem, self.is_white_)
         self.num_pieces += 1
+        row, col = action_id_2_coord(action_id)
         self._update_captures(row, col)
         if self._caps() == 5 or self._is_con5(row, col):
             if self.is_white_:
@@ -370,6 +371,11 @@ def _action_id_2_chunk(id):
     occ_chunk = id // 64
     occ_chunk_rem = id - occ_chunk * 64
     return occ_chunk, occ_chunk_rem
+
+def action_id_2_coord(id):    
+    row = id // COLS
+    col = id - row*COLS
+    return row, col
 
 def _coord_2_action_id(row, col):
     return row*COLS + col
