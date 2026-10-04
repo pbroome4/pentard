@@ -65,14 +65,17 @@ impl PenteState{
     }
 
 
-    fn play(&mut self, row: usize, col: usize){
-        if self.is_black_{
-            self.board_[row][col] = Piece::Black;
-        }else{
-            self.board_[row][col] = Piece::White;
+    pub fn play(&mut self, row: usize, col: usize){
+        let action = PenteState::coord_2_action(row, col);
+        if self.get_actions().contains(&action){
+            if self.is_black_{
+                self.board_[row][col] = Piece::Black;
+            }else{
+                self.board_[row][col] = Piece::White;
+            }
+            self.num_pieces_ += 1;
+            self.is_black_ = !self.is_black_;
         }
-        self.num_pieces_ += 1;
-
         //action = PenteState.coord_2_action(row, col);
         //self.apply_action(action);
     }
