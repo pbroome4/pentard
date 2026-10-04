@@ -22,12 +22,12 @@ def _action_id_2_chunk(id):
     """
     occ_chunk = id // 64
     occ_chunk_rem = id - occ_chunk * 64
-    return occ_chunk, occ_chunk_rem
+    return int(occ_chunk), int(occ_chunk_rem)
 
 def action_id_2_coord(id):    
     row = id // COLS
     col = id - row*COLS
-    return row, col
+    return int(row), int(col)
 
 def _coord_2_action_id(row, col):
     return row*COLS + col
@@ -36,7 +36,7 @@ def _chunk_2_coord(chunk, chunk_rem):
     bit_pos = chunk * 64 + chunk_rem
     row = bit_pos / COLS
     col = bit_pos - row*COLS
-    return (row,col)
+    return int(row), int(col)
 
 
 def _coord_inbounds(row, col):
@@ -138,7 +138,8 @@ class GameState:
                 self.game_state_ = State.Black
         elif self.num_pieces == ROWS*COLS:
             self.game_state_ = State.Draw
-        self.is_white_ = not self.is_white_
+        if not self.is_terminal():
+            self.is_white_ = not self.is_white_
 
 
     def get_legal_moves(self):
@@ -157,14 +158,14 @@ class GameState:
         return self.game_state_ != State.Running
     
 
-    def get_terminal_value(self, is_white):
+    def get_terminal_value(self, is_white: bool):
         """
         Assumes is_terminal() == True.
         Returns the score {-1, 0, 1} relative to the winner.
         -1 if provided provided player lost. 0 for draw. 1 for win
         """
-        if (self.is_white_ and self.game_state_ == State.White) \
-                or (self.is_black_ and self.game_state_ == State.Black):
+        if (is_white and self.game_state_ == State.White) \
+                or (not is_white and self.game_state_ == State.Black):
             return 1
         elif self.game_state_ == State.Draw:
             return 0
@@ -356,7 +357,8 @@ class GameState:
             self.b_caps_ += delta
             self.b_caps_
 
-    def _fill(self, chunk, chunk_rem, is_white:bool):
+    def _fill(self, chunk:int, chunk_rem:int, is_white:bool):
+        chunk = int(chunk); chunk_rem = int(chunk_rem)
         if is_white:
             self.w_occs_[chunk] |=  np.uint64(1) << chunk_rem
         else:
