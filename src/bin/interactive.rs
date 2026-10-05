@@ -1,6 +1,7 @@
 
 use std::io::{self, Write}; // Bring the I/O traits into scope
-use pentard::*;
+use pentard::engine::*;
+
 
 fn parse_coord(s: &str) -> Result<(usize, usize), String> {
     let mut parts = s.trim().split(',');
@@ -33,7 +34,7 @@ fn read_move() -> Result<(usize, usize), String>{
 }
 
 fn main(){
-    let mut brd = pentard::PenteState::new();
+    let mut brd = PenteState::new();
     loop{
         print!("{}", brd);
         let player: &str = brd.active_plyr_str();
