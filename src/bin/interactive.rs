@@ -35,18 +35,22 @@ fn main(){
     let mut brd = pentard::PenteState::new();
     loop{
         print!("{}", brd);
-        let player = brd.active_plyr_str();
+        let player: &str = brd.active_plyr_str();
         print!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();
         if let Ok((row, col)) = read_move() {
             if brd.play(row, col){
+                if brd.is_terminal(){
+                    break;
+                }
             }else{
-                print!("Illegal Move")
+                print!("Illegal Move");
+                continue;
             }
         }else{
             print!("Failed to read move")
         }
     }
-    
-    
+    print!(brd);
+    print!("Game Over!");
 }

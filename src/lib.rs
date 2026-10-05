@@ -14,6 +14,7 @@ pub enum Piece{
     Empty = 0,
     Black = 1,
     White = 2,
+    Sentinel = 3, 
 }
 
 pub trait GameState{
@@ -38,10 +39,12 @@ pub struct PenteState{
     b_caps_: u8, 
     w_caps_: u8,
     is_black_: bool,
-    num_pieces_: u8,  // Number of pieces activly on the board.
+    num_pieces_: usize, // Number of pieces activly on the board.
                       // Is redundant, since we could loop over board,
                       // but maintined to minimize computation
-    is_terminal_: bool,
+    is_terminal_: Piece, // Empty is non-terminal.
+                         // Colored Piece is terminal winners color.
+                         // Sentinel is draw.
 }
 
 impl PenteState{
@@ -52,7 +55,7 @@ impl PenteState{
             w_caps_:  0,
             is_black_: true,
             num_pieces_: 0,
-            is_terminal_: false,
+            is_terminal_: Piece::Empty,
         }
     }
 
@@ -77,7 +80,11 @@ impl PenteState{
             }
             self.num_pieces_ += 1;
             self.update_captures(row, col);
-            // check connect 5
+            if self.b_caps_ == 5 || self.w_caps_ == 5 || self.is_con5(row,col){
+                self.is_terminal_ = self.get_active_piece()
+            }else if self.num_pieces_ == ROWS*COLS{
+                self.is_terminal_ = Piece::Sentinel;
+            }
             self.is_black_ = !self.is_black_;
             return true;
         }
@@ -94,11 +101,87 @@ impl PenteState{
         return self.is_black_;
     }
 
-    
+    fn is_con5(&self, row: usize, col: usize) -> bool{
+        let active = self.get_active_piece();
+        let mut count:u32 = 1; // Vertical
+        let r = row as i32;
+        let c = col as i32;
+        for i in 1..5{ 
+            if self.get_square(r-i,c) == Some(active) {
+                count += 1;
+            }else{ break; }
+        }
+        for i in 1..5{ 
+            if self.get_square(r+i,c) == Some(active) {
+                count += 1;
+            }else{ break; }
+        }
+        if count >= 5 {
+            return true;
+        }
+        
+        count = 1; // Diagonal /
+        for i in 1..5{ 
+            if self.get_square(r-i,c+i) == Some(active){
+                count += 1;
+            }else{ break; }
+        }
+        for i in 1..5{ 
+            if self.get_square(r+i,c-i) == Some(active){
+                count += 1;
+            }else{ break; }
+        }
+        if count >= 5 {
+            return true;
+        }
+
+        count = 1; // Horizontal
+        for i in 1..5{ 
+            if self.get_square(r,c-i) == Some(active){
+                count += 1;
+            }else{ break; }
+        }
+        for i in 1..5{ 
+            if self.get_square(r,c+i) == Some(active){
+                count += 1;
+            }else{ break; }
+        }
+        if count >= 5 {
+            return true;
+        }
+
+        count = 1; // Diagonal \
+        for i in 1..5{ 
+            if self.get_square(r-i,c-i) == Some(active){
+                count += 1;
+            }else{ break; }
+        }
+        for i in 1..5{ 
+            if self.get_square(r+i,c+i) == Some(active){
+                count += 1;
+            }else{ break; }
+        }
+        if count >= 5 {
+            return true;
+        }
+        return false;
+    }
+
+
+    fn get_square(&self, row: i32, col: i32) -> Option<Piece>{
+        if row < 0 || row >= (ROWS as i32) || col < 0 || col >= (COLS as i32) {
+            return None
+        }
+        let r = row as usize;
+        let c = col as usize;
+        return Some(self.board_[r][c]);
+    }
+
+
     fn update_captures(&mut self, row:usize, col:usize) {
         let active = self.get_active_piece();
         let inactive = self.get_inactive_piece();
-        if row >= 3{ // vert up
+        if row >= 3{ // Vertical up
             if self.board_[row-3][col] == active 
                     && self.board_[row-2][col] == inactive
                     && self.board_[row-1][col] == inactive{
@@ -107,7 +190,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if row < ROWS-3{ // vert down
+        if row < ROWS-3{ // Vertical down
             if self.board_[row+3][col] == active 
                     && self.board_[row+2][col] == inactive
                     && self.board_[row+1][col] == inactive{
@@ -116,7 +199,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if col >= 3{ // horiz left
+        if col >= 3{ //  Horizontal left
             if self.board_[row][col-3] == active 
                     && self.board_[row][col-2] == inactive
                     && self.board_[row][col-1] == inactive{
@@ -125,7 +208,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if col < COLS - 3{ // horiz right
+        if col < COLS - 3{ // Horizontal right
             if self.board_[row][col+3] == active 
                     && self.board_[row][col+2] == inactive
                     && self.board_[row][col+1] == inactive{
@@ -134,7 +217,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if row >= 3 && col >= 3{ // Diag top-left
+        if row >= 3 && col >= 3{ // Diagonal top-left
             if self.board_[row-3][col-3] == active 
                     && self.board_[row-2][col-2] == inactive
                     && self.board_[row-1][col-1] == inactive{
@@ -143,7 +226,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if row >= 3 && col < COLS-3{ // Diag top-right
+        if row >= 3 && col < COLS-3{ // Diagonal top-right
             if self.board_[row-3][col+3] == active 
                     && self.board_[row-2][col+2] == inactive
                     && self.board_[row-1][col+1] == inactive{
@@ -152,7 +235,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if row < COLS-3 && col < COLS-3{ // Diag bottom-right
+        if row < ROWS-3 && col < COLS-3{ // Diagonal bottom-right
             if self.board_[row+3][col+3] == active 
                     && self.board_[row+2][col+2] == inactive
                     && self.board_[row+1][col+1] == inactive{
@@ -161,7 +244,7 @@ impl PenteState{
                 self.add_captures(self.is_black_, 1);
             }
         }
-        if row < COLS-3 && col >= 3{ // Diag bottom-right
+        if row < ROWS-3 && col >= 3{ // Diagonal bottom-left
             if self.board_[row+3][col-3] == active 
                     && self.board_[row+2][col-2] == inactive
                     && self.board_[row+1][col-1] == inactive{
@@ -211,8 +294,8 @@ impl PenteState{
     }
     //fn apply_action(&self, action: usize);
     
-    fn is_terminal(&self) -> bool{
-        return self.is_terminal_;
+    pub fn is_terminal(&self) -> bool{
+        return self.is_terminal_ != Piece::Empty;
     }
     //fn get_terminal_value(&self) -> isize;
     //fn clone(&self) -> Self; 
