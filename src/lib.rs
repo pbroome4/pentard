@@ -22,7 +22,7 @@ pub trait GameState{
     fn get_actions(&self) -> Vec<usize>;
 
     // Apply an action. action MUST be a legal action.
-    fn apply_action(&self, action: usize);
+    fn apply_action(&mut self, action: usize);
 
     // Is the game over
     fn is_terminal(&self) -> bool;
@@ -73,19 +73,7 @@ impl PenteState{
     pub fn play(&mut self, row: usize, col: usize) -> bool{
         let action = PenteState::coord_2_action(row,col);
         if self.is_legal_action(action){
-            if self.is_black_{
-                self.board_[row][col] = Piece::Black;
-            }else{
-                self.board_[row][col] = Piece::White;
-            }
-            self.num_pieces_ += 1;
-            self.update_captures(row, col);
-            if self.b_caps_ == 5 || self.w_caps_ == 5 || self.is_con5(row,col){
-                self.is_terminal_ = self.get_active_piece()
-            }else if self.num_pieces_ == ROWS*COLS{
-                self.is_terminal_ = Piece::Sentinel;
-            }
-            self.is_black_ = !self.is_black_;
+            self.apply_action(action);
             return true;
         }
         return false;
@@ -95,6 +83,11 @@ impl PenteState{
 
     pub fn is_legal_action(&self, action: usize) -> bool{
         return self.get_actions().contains(&action);
+    }
+
+    pub fn active_plyr_str(&self) -> &str{
+        const PLYR_MAP: [&str; 2] = ["White", "Black"];
+        return PLYR_MAP[self.is_black_ as usize];
     }
 
     pub fn is_black(&self) -> bool{
@@ -274,13 +267,10 @@ impl PenteState{
         return PIECE_MAP[self.is_black_ as usize]
     }
 
-    pub fn active_plyr_str(&self) -> &str{
-        const PLYR_MAP: [&str; 2] = ["White", "Black"];
-        return PLYR_MAP[self.is_black_ as usize];
-    }
+    
 }
 
-impl PenteState{
+impl GameState for PenteState{
     fn get_actions(&self) -> Vec<usize>{
         let mut v = Vec::with_capacity(ROWS*COLS);
         for row in 0..ROWS{
@@ -292,13 +282,48 @@ impl PenteState{
         }
         return v;
     }
-    //fn apply_action(&self, action: usize);
     
-    pub fn is_terminal(&self) -> bool{
+    fn apply_action(&mut self, action: usize){
+        let (row,col) = PenteState::action_2_coord(action);
+        if self.is_black_{
+            self.board_[row][col] = Piece::Black;
+        }else{
+            self.board_[row][col] = Piece::White;
+        }
+        self.num_pieces_ += 1;
+        self.update_captures(row, col);
+        if self.b_caps_ == 5 || self.w_caps_ == 5 || self.is_con5(row,col){
+            self.is_terminal_ = self.get_active_piece()
+        }else if self.num_pieces_ == ROWS*COLS{
+            self.is_terminal_ = Piece::Sentinel;
+        }
+        self.is_black_ = !self.is_black_;
+    }
+    
+    fn is_terminal(&self) -> bool{
         return self.is_terminal_ != Piece::Empty;
     }
-    //fn get_terminal_value(&self) -> isize;
-    //fn clone(&self) -> Self; 
+    
+    fn get_terminal_value(&self) -> i32{
+        if self.is_terminal_ == Piece::Black{
+            return 1;
+        }else if self.is_terminal_ == Piece::White{
+            return -1;
+        }
+        return 0;
+    }
+
+
+    fn clone(&self) -> Self{
+        return Self{
+            board_: self.board_.clone(),
+            b_caps_: self.b_caps_,
+            w_caps_: self.w_caps_,
+            is_black_: self.is_black_,
+            num_pieces_: self.num_pieces_,
+            is_terminal_:self.is_terminal_
+        }
+    } 
 }
 
 

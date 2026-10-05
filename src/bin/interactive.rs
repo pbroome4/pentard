@@ -1,5 +1,6 @@
 
 use std::io::{self, Write}; // Bring the I/O traits into scope
+use pentard::*;
 
 fn parse_coord(s: &str) -> Result<(usize, usize), String> {
     let mut parts = s.trim().split(',');
@@ -51,6 +52,6 @@ fn main(){
             print!("Failed to read move")
         }
     }
-    print!(brd);
+    print!("{}", brd);
     print!("Game Over!");
 }
