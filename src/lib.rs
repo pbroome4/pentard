@@ -105,7 +105,70 @@ impl PenteState{
                 self.board_[row-2][col] = Piece::Empty;
                 self.board_[row-1][col] = Piece::Empty;
                 self.add_captures(self.is_black_, 1);
-                }
+            }
+        }
+        if row < ROWS-3{ // vert down
+            if self.board_[row+3][col] == active 
+                    && self.board_[row+2][col] == inactive
+                    && self.board_[row+1][col] == inactive{
+                self.board_[row+2][col] = Piece::Empty;
+                self.board_[row+1][col] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
+        }
+        if col >= 3{ // horiz left
+            if self.board_[row][col-3] == active 
+                    && self.board_[row][col-2] == inactive
+                    && self.board_[row][col-1] == inactive{
+                self.board_[row][col-2] = Piece::Empty;
+                self.board_[row][col-1] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
+        }
+        if col < COLS - 3{ // horiz right
+            if self.board_[row][col+3] == active 
+                    && self.board_[row][col+2] == inactive
+                    && self.board_[row][col+1] == inactive{
+                self.board_[row][col+2] = Piece::Empty;
+                self.board_[row][col+1] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
+        }
+        if row >= 3 && col >= 3{ // Diag top-left
+            if self.board_[row-3][col-3] == active 
+                    && self.board_[row-2][col-2] == inactive
+                    && self.board_[row-1][col-1] == inactive{
+                self.board_[row-2][col-2] = Piece::Empty;
+                self.board_[row-1][col-1] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
+        }
+        if row >= 3 && col < COLS-3{ // Diag top-right
+            if self.board_[row-3][col+3] == active 
+                    && self.board_[row-2][col+2] == inactive
+                    && self.board_[row-1][col+1] == inactive{
+                self.board_[row-2][col+2] = Piece::Empty;
+                self.board_[row-1][col+1] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
+        }
+        if row < COLS-3 && col < COLS-3{ // Diag bottom-right
+            if self.board_[row+3][col+3] == active 
+                    && self.board_[row+2][col+2] == inactive
+                    && self.board_[row+1][col+1] == inactive{
+                self.board_[row+2][col+2] = Piece::Empty;
+                self.board_[row+1][col+1] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
+        }
+        if row < COLS-3 && col >= 3{ // Diag bottom-right
+            if self.board_[row+3][col-3] == active 
+                    && self.board_[row+2][col-2] == inactive
+                    && self.board_[row+1][col-1] == inactive{
+                self.board_[row+2][col-2] = Piece::Empty;
+                self.board_[row+1][col-1] = Piece::Empty;
+                self.add_captures(self.is_black_, 1);
+            }
         }
     }
     
