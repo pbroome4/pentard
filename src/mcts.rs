@@ -13,6 +13,7 @@ pub struct MctsNode<A> {
     pub total_value_: f32,             // Accumulated evaluation value
 }
 
+
 pub struct MctsTree<A> {
     pub nodes_: Vec<MctsNode<A>>,   // The Memory Pool Arena
 }
@@ -38,8 +39,6 @@ impl<A> MctsTree<A>{
         x.nodes_.push(root);
         return x;
     }
-
-    
 
     pub fn get(&self, id: NodeId) -> Option<& MctsNode<A>>{
         return self.nodes_.get(id);
@@ -86,9 +85,13 @@ fn mcts_sim<A>(tree: &mut MctsTree<A>, state: &impl engine::GameState<A>) -> Opt
     let mut state_copy = state.clone();
     let node_id = 0; // Root
     while !state.is_terminal(){
-        if tree.is_expanded(node_id) == Some(false){
+        let Some(node) = tree.get(node_id) else{ return None; };
+        let Some(is_expanded) = tree.is_expanded(node_id) else {return None;};
+        if node.visits_ >= 1 && !is_expanded {
             tree.expand_node(node_id, state.get_actions());
         }
+
+
     }
     return Some(true);
 }
