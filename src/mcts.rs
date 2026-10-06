@@ -1,3 +1,4 @@
+use rand;
 use crate::engine;
 
 type NodeId = usize;
@@ -62,18 +63,47 @@ impl<A> MctsTree<A>{
         }
     }
 
+
     pub fn pick_ucb(&self, node_id:NodeId) -> Option<NodeId>{
         // TODO
-        // uses resevoir sampling
+        // uses resevoir sampling to uniformly select argmax
         let node = self.get(node_id)?;
-        let candidate_id = node.first_child_?;
-        let candidate_node = self.get(candidate_id)?;
-        let mut ucb_id  = candidate_id;
+        let child_id = node.first_child_?;
+        let mut ucb_id  = child_id;
+        let mut ucb_val = self.calc_ucb(node_id, child_id);
         let mut count = 1;
-        while let Some(candidate_id) = candidate_node.next_sibling_ {
-            let candidate_node = self.get(candidate_id)?;
+        while let Some(child_id) = self.next_sibling(child_id){   
+            let ucb_test = self.calc_ucb(node_id, child_id);
+            if ucb_test > ucb_val{
+                count = 0;
+                ucb_val = ucb_test;
+                ucb_id = child_id;
+            }else if ucb_test == ucb_val{
+                count += 1;
+                let p= 1.0 / (count as f32);
+                if rand::random::<f32>() < p{    // resevoir sampling
+                    ucb_id = child_id;
+                }
+            }
         }
         return None;
+    }
+
+    fn calc_ucb(&self, parent: NodeId, child: NodeId) -> Option<f32>{
+        let C = (2.0_f32).sqrt();
+        let pnode = self.get(parent)?;
+        let cnode = self.get(child)?;
+        let mut ret = Some(f32::INFINITY);
+        if cnode.visits_ > 0{
+            ret = Some((cnode.total_value_ / (cnode.visits_ as f32)) +
+                   C * ((pnode.visits_ / cnode.visits_) as f32).ln().sqrt() );
+        }
+        return ret;
+    }
+
+    fn next_sibling(&self, node_id:NodeId) -> Option<NodeId>{
+        let node = self.get(node_id)?;
+        return node.next_sibling_;
     }
 
     // Create a new node in the arena-pool. Return it's id.
