@@ -55,11 +55,25 @@ impl<A> MctsTree<A>{
         return None;
     }
 
-    pub fn expand_node(&mut self, node_id: NodeId, actions: Vec<A>){
+    pub fn expand(&mut self, node_id: NodeId, actions: Vec<A>){
         for action in actions.into_iter(){{
                 self.add_child(action, node_id);
             }
         }
+    }
+
+    pub fn pick_ucb(&self, node_id:NodeId) -> Option<NodeId>{
+        // TODO
+        // uses resevoir sampling
+        let node = self.get(node_id)?;
+        let candidate_id = node.first_child_?;
+        let candidate_node = self.get(candidate_id)?;
+        let mut ucb_id  = candidate_id;
+        let mut count = 1;
+        while let Some(candidate_id) = candidate_node.next_sibling_ {
+            let candidate_node = self.get(candidate_id)?;
+        }
+        return None;
     }
 
     // Create a new node in the arena-pool. Return it's id.
@@ -85,13 +99,17 @@ fn mcts_sim<A>(tree: &mut MctsTree<A>, state: &impl engine::GameState<A>) -> Opt
     let mut state_copy = state.clone();
     let node_id = 0; // Root
     while !state.is_terminal(){
-        let Some(node) = tree.get(node_id) else{ return None; };
-        let Some(is_expanded) = tree.is_expanded(node_id) else {return None;};
+        let node = tree.get(node_id)?;
+        let is_expanded = tree.is_expanded(node_id)?;
         if node.visits_ >= 1 && !is_expanded {
-            tree.expand_node(node_id, state.get_actions());
+            tree.expand(node_id, state.get_actions());
         }
-
-
+        let node = tree.get(node_id)?;
+        if node.visits_ > 0{
+            //pick ucb
+            //continue;
+        }
+        //random rollout
     }
     return Some(true);
 }
