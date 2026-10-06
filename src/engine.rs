@@ -14,12 +14,12 @@ pub enum Piece{
     Sentinel = 3, 
 }
 
-pub trait GameState{
+pub trait GameState<A>{
     // Get vector of legal actions 
-    fn get_actions(&self) -> Vec<usize>;
+    fn get_actions(&self) -> Vec<A>;
 
     // Apply an action. action MUST be a legal action.
-    fn apply_action(&mut self, action: usize);
+    fn apply_action(&mut self, action: A);
 
     // Is the game over
     fn is_terminal(&self) -> bool;
@@ -267,7 +267,7 @@ impl PenteState{
     
 }
 
-impl GameState for PenteState{
+impl GameState<usize> for PenteState{
     fn get_actions(&self) -> Vec<usize>{
         let mut v = Vec::with_capacity(ROWS*COLS);
         for row in 0..ROWS{
@@ -301,7 +301,7 @@ impl GameState for PenteState{
         return self.is_terminal_ != Piece::Empty;
     }
     
-    fn get_terminal_value(&self) -> i32{
+    fn get_terminal_value(&self, ) -> i32{
         if self.is_terminal_ == Piece::Black{
             return 1;
         }else if self.is_terminal_ == Piece::White{
