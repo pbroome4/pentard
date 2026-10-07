@@ -1,6 +1,7 @@
 
 use std::io::{self, Write}; // Bring the I/O traits into scope
 use pentard::engine::*;
+use pentard::mcts::*;
 
 
 fn parse_coord(s: &str) -> Result<(usize, usize), String> {
@@ -37,6 +38,7 @@ fn main(){
     let mut brd = PenteState::new();
     loop{
         print!("{}", brd);
+        mcts(&brd, 1);
         let player: &str = brd.active_plyr_str();
         print!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();

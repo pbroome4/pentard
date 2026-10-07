@@ -19,7 +19,7 @@ pub trait GameState<A>{
     fn get_actions(&self) -> Vec<A>;
 
     // Apply an action. action MUST be a legal action.
-    fn apply_action(&mut self, action: A);
+    fn apply_action(&mut self, action: &A);
 
     // Is the game over
     fn is_terminal(&self) -> bool;
@@ -60,7 +60,7 @@ impl PenteState{
         row*COLS + col
     }
 
-    fn action_2_coord(action: usize) -> (usize, usize){
+    fn action_2_coord(action: &usize) -> (usize, usize){
         let row = action/COLS;
         let col = action - row*COLS;
         (row, col)
@@ -69,8 +69,8 @@ impl PenteState{
 
     pub fn play(&mut self, row: usize, col: usize) -> bool{
         let action = PenteState::coord_2_action(row,col);
-        if self.is_legal_action(action){
-            self.apply_action(action);
+        if self.is_legal_action(&action){
+            self.apply_action(&action);
             return true;
         }
         return false;
@@ -78,8 +78,8 @@ impl PenteState{
         //self.apply_action(action);
     }
 
-    pub fn is_legal_action(&self, action: usize) -> bool{
-        return self.get_actions().contains(&action);
+    pub fn is_legal_action(&self, action: &usize) -> bool{
+        return self.get_actions().contains(action);
     }
 
     pub fn active_plyr_str(&self) -> &str{
@@ -280,7 +280,7 @@ impl GameState<usize> for PenteState{
         return v;
     }
     
-    fn apply_action(&mut self, action: usize){
+    fn apply_action(&mut self, action: &usize){
         let (row,col) = PenteState::action_2_coord(action);
         if self.is_black_{
             self.board_[row][col] = Piece::Black;
