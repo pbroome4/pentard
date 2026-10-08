@@ -1,8 +1,9 @@
 use std::fmt;
+use tracing::{trace, debug, info};
 
 
-pub const ROWS:usize = 9;
-pub const COLS:usize = 9;
+pub const ROWS:usize = 19;
+pub const COLS:usize = 19;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +282,7 @@ impl GameState<usize> for PenteState{
     }
     
     fn apply_action(&mut self, action: &usize){
-        println!("Applying action {}", action);
+        trace!("Applying action {}", action);
         let (row,col) = PenteState::action_2_coord(action);
         if self.is_black_{
             self.board_[row][col] = Piece::Black;

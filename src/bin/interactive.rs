@@ -1,5 +1,9 @@
 
 use std::io::{self, Write}; // Bring the I/O traits into scope
+use tracing::{debug, info};
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber;
+
 use pentard::engine::*;
 use pentard::mcts::*;
 
@@ -35,12 +39,16 @@ fn read_move() -> Result<(usize, usize), String>{
 }
 
 fn main(){
+    tracing_subscriber::fmt()
+        .with_max_level(LevelFilter::DEBUG) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
+        .init();
+
     let mut brd = PenteState::new();
     loop{
-        print!("{}", brd);
-        mcts(&brd, 10);
+        info!("\n{}", brd);
+        mcts(&brd, 10000);
         let player: &str = brd.active_plyr_str();
-        print!("Enter move for {player} as row, col: ");
+        info!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();
         if let Ok((row, col)) = read_move() {
             if brd.play(row, col){
@@ -48,13 +56,13 @@ fn main(){
                     break;
                 }
             }else{
-                print!("Illegal Move");
+                info!("Illegal Move");
                 continue;
             }
         }else{
-            print!("Failed to read move")
+            info!("Failed to read move")
         }
     }
-    print!("{}", brd);
-    print!("Game Over!");
+    info!("{}", brd);
+    info!("Game Over!");
 }

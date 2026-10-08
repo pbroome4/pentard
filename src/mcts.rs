@@ -1,6 +1,8 @@
 use rand::prelude::*;
 use crate::engine;
 use std::fmt;
+use tracing::{trace, debug, info};
+
 
 type NodeId = usize;
 
@@ -22,7 +24,7 @@ impl<A> fmt::Display for MctsNode<A>{
         if self.visits_ > 0{
             avg_val = self.total_value_ / (self.visits_ as f32);
         }
-        writeln!(f, "node_id: {}   visits: {}   avg_value: {}   is_expanded: {}",self.id_, self.visits_, avg_val, self.is_expanded_);
+        write!(f, "node_id: {}   visits: {}   avg_value: {}   is_expanded: {}",self.id_, self.visits_, avg_val, self.is_expanded_);
         return Ok(());
     }
 }
@@ -80,7 +82,7 @@ impl<A> MctsTree<A>{
 
     pub fn pick_ucb(&self, node_id:NodeId) -> Option<NodeId>{
         // uses resevoir sampling to uniformly select argmax
-        println!("Picking ucb move");
+        trace!("Picking ucb move");
         let mut child_id = self.get(node_id)?.first_child_?;
         let mut ucb_id  = child_id;
         let mut ucb_val = self.calc_ucb(node_id, child_id)?;
@@ -89,7 +91,7 @@ impl<A> MctsTree<A>{
             let Some(next_child_id) = self.get(child_id)?.next_sibling_ else { break;};
             child_id = next_child_id;
             let ucb_test = self.calc_ucb(node_id, child_id)?;
-            println!("ucb_id: {}  ucb_val: {}   ucb_test id: {}  val:{}",ucb_id, ucb_val, child_id, ucb_test);
+            trace!("ucb_id: {}  ucb_val: {}   ucb_test id: {}  val:{}",ucb_id, ucb_val, child_id, ucb_test);
             if ucb_test > ucb_val{
                 count = 1;
                 ucb_val = ucb_test;
@@ -112,7 +114,7 @@ impl<A> MctsTree<A>{
             let node = self.get_mut(node_id)?;
             node.total_value_ += reward as f32;
             node.visits_ += 1;
-            println!("{}", node);
+            debug!("{}", node);
             let Some(parent_id) = node.parent_ else {break};
             node_id = parent_id;
         }
@@ -147,7 +149,7 @@ impl<A> MctsTree<A>{
         };
         self.nodes_.push(child);
         self.nodes_[parent].first_child_ = Some(child_id);
-        println!("Added child {}", child_id);
+        debug!("Added child {}", child_id);
         return child_id;
     }
 }
@@ -172,25 +174,24 @@ fn mcts_sim<A>(tree: &mut MctsTree<A>, state_orig: &impl engine::GameState<A>, m
         if depth >= max_depth {break;};
         if let Some(node) = tree.get(node_id){
             if node.visits_>= 1 && !node.is_expanded_{
-                println!("Expanding {}", node);
+                debug!("Expanding {}", node);
                 tree.expand(node_id, state.get_actions());
                 let node = tree.get(node_id)?;
-                println!("Expanded {}", node);
+                debug!("Expanded {}", node);
             }
         }
         let node = tree.get(node_id)?;
         if !node.is_expanded_{ break;}
         let Some(next_node_id) = tree.pick_ucb(node_id) else {break;};
-        println!("ucb id: {}", next_node_id);
         let next_node = tree.get(next_node_id)?;
         let Some(action) = next_node.action_.as_ref() else { break;};
         state.apply_action(action);
         node_id = next_node_id;
         depth +=1;
-        println!("depth {}", depth);
+        debug!("mcts_sim depth {}", depth);
     } // node_id should be leaf node.
     let reward = random_rollout(&mut state);
-    println!("reward: {}", reward);
+    debug!("reward: {}", reward);
     tree.backprop(node_id, reward);    
     return Some(());
 }
@@ -202,6 +203,6 @@ pub fn mcts<A>(state: &impl engine::GameState<A>, num_sims: u64) -> Option<()>{
         mcts_sim(&mut tree, state, 100);
     }
     let root = tree.get(0)?;
-    println!("{}", root);
+    info!("{}", root);
     return Some(());
 }
