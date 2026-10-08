@@ -75,12 +75,11 @@ impl PenteState{
             return true;
         }
         return false;
-        //action = PenteState.coord_2_action(row, col);
-        //self.apply_action(action);
     }
 
     pub fn is_legal_action(&self, action: &usize) -> bool{
-        return self.get_actions().contains(action);
+        let (row, col) = PenteState::action_2_coord(action);
+        return row < ROWS && col < COLS && self.board_[row][col] == Piece::Empty;
     }
 
     pub fn active_plyr_str(&self) -> &str{
@@ -97,63 +96,26 @@ impl PenteState{
         let mut count:u32 = 1; // Vertical
         let r = row as i32;
         let c = col as i32;
-        for i in 1..5{ 
-            if self.get_square(r-i,c) == Some(active) {
-                count += 1;
-            }else{ break; }
-        }
-        for i in 1..5{ 
-            if self.get_square(r+i,c) == Some(active) {
-                count += 1;
-            }else{ break; }
-        }
-        if count >= 5 {
-            return true;
-        }
+        const DIRS: [(i32, i32); 4] = [
+            (1, 0), (0, 1),   // Vert/Horiz
+            (1, 1), (1, -1),  // Diagonals
+        ];
         
-        count = 1; // Diagonal /
-        for i in 1..5{ 
-            if self.get_square(r-i,c+i) == Some(active){
-                count += 1;
-            }else{ break; }
-        }
-        for i in 1..5{ 
-            if self.get_square(r+i,c-i) == Some(active){
-                count += 1;
-            }else{ break; }
-        }
-        if count >= 5 {
-            return true;
-        }
-
-        count = 1; // Horizontal
-        for i in 1..5{ 
-            if self.get_square(r,c-i) == Some(active){
-                count += 1;
-            }else{ break; }
-        }
-        for i in 1..5{ 
-            if self.get_square(r,c+i) == Some(active){
-                count += 1;
-            }else{ break; }
-        }
-        if count >= 5 {
-            return true;
-        }
-
-        count = 1; // Diagonal \
-        for i in 1..5{ 
-            if self.get_square(r-i,c-i) == Some(active){
-                count += 1;
-            }else{ break; }
-        }
-        for i in 1..5{ 
-            if self.get_square(r+i,c+i) == Some(active){
-                count += 1;
-            }else{ break; }
-        }
-        if count >= 5 {
-            return true;
+        for (dr, dc) in DIRS.iter(){
+            count = 1;
+            for i in 1..5{
+                if self.get_square(r + dr * i, c + dc * i) == Some(active){
+                    count+=1;
+                } else{ break;}
+            }
+            for i in 1..5{
+                if self.get_square(r - dr * i, c - dc * i) == Some(active){
+                    count+=1;
+                } else{ break;}
+            }
+            if count >= 5{
+                return true;
+            }
         }
         return false;
     }
@@ -168,80 +130,24 @@ impl PenteState{
         return Some(self.board_[r][c]);
     }
 
-
-    fn update_captures(&mut self, row:usize, col:usize) {
+    fn update_captures(&mut self, row: usize, col: usize) {
         let active = self.get_active_piece();
         let inactive = self.get_inactive_piece();
-        if row >= 3{ // Vertical up
-            if self.board_[row-3][col] == active 
-                    && self.board_[row-2][col] == inactive
-                    && self.board_[row-1][col] == inactive{
-                self.board_[row-2][col] = Piece::Empty;
-                self.board_[row-1][col] = Piece::Empty;
+        let r = row as i32;
+        let c = col as i32;
+        const DIRS: [(i32, i32); 8] = [
+            (-1, 0), (1, 0), (0, -1), (0, 1),   // Vert/Horiz
+            (-1, -1), (1, 1), (-1, 1), (1, -1)  // Diagonals
+        ];
+        for (dr, dc) in DIRS.iter() {
+            if self.get_square(r + dr, c + dc) == Some(inactive) &&
+            self.get_square(r + dr * 2, c + dc * 2) == Some(inactive) &&
+            self.get_square(r + dr * 3, c + dc * 3) == Some(active) 
+            {
+                self.board_[(r + dr) as usize][(c + dc) as usize] = Piece::Empty;
+                self.board_[(r + dr * 2) as usize][(c + dc * 2) as usize] = Piece::Empty;
                 self.add_captures(self.is_black_, 1);
-            }
-        }
-        if row < ROWS-3{ // Vertical down
-            if self.board_[row+3][col] == active 
-                    && self.board_[row+2][col] == inactive
-                    && self.board_[row+1][col] == inactive{
-                self.board_[row+2][col] = Piece::Empty;
-                self.board_[row+1][col] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
-            }
-        }
-        if col >= 3{ //  Horizontal left
-            if self.board_[row][col-3] == active 
-                    && self.board_[row][col-2] == inactive
-                    && self.board_[row][col-1] == inactive{
-                self.board_[row][col-2] = Piece::Empty;
-                self.board_[row][col-1] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
-            }
-        }
-        if col < COLS - 3{ // Horizontal right
-            if self.board_[row][col+3] == active 
-                    && self.board_[row][col+2] == inactive
-                    && self.board_[row][col+1] == inactive{
-                self.board_[row][col+2] = Piece::Empty;
-                self.board_[row][col+1] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
-            }
-        }
-        if row >= 3 && col >= 3{ // Diagonal top-left
-            if self.board_[row-3][col-3] == active 
-                    && self.board_[row-2][col-2] == inactive
-                    && self.board_[row-1][col-1] == inactive{
-                self.board_[row-2][col-2] = Piece::Empty;
-                self.board_[row-1][col-1] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
-            }
-        }
-        if row >= 3 && col < COLS-3{ // Diagonal top-right
-            if self.board_[row-3][col+3] == active 
-                    && self.board_[row-2][col+2] == inactive
-                    && self.board_[row-1][col+1] == inactive{
-                self.board_[row-2][col+2] = Piece::Empty;
-                self.board_[row-1][col+1] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
-            }
-        }
-        if row < ROWS-3 && col < COLS-3{ // Diagonal bottom-right
-            if self.board_[row+3][col+3] == active 
-                    && self.board_[row+2][col+2] == inactive
-                    && self.board_[row+1][col+1] == inactive{
-                self.board_[row+2][col+2] = Piece::Empty;
-                self.board_[row+1][col+1] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
-            }
-        }
-        if row < ROWS-3 && col >= 3{ // Diagonal bottom-left
-            if self.board_[row+3][col-3] == active 
-                    && self.board_[row+2][col-2] == inactive
-                    && self.board_[row+1][col-1] == inactive{
-                self.board_[row+2][col-2] = Piece::Empty;
-                self.board_[row+1][col-1] = Piece::Empty;
-                self.add_captures(self.is_black_, 1);
+                self.num_pieces_ -= 2;
             }
         }
     }
@@ -347,23 +253,9 @@ impl fmt::Display for PenteState {
             }
             writeln!(f)?;
             }
-        writeln!(f, "Black captures:{}   White Captures{}", self.b_caps_, self.w_caps_)?;
+        writeln!(f, "Black captures:{}   White Captures:{}", self.b_caps_, self.w_caps_)?;
         Ok(())
     }
 }
 
 
-
-//use pyo3::prelude::*;
-//
-///// A Python module implemented in Rust.
-//#[pymodule]
-//mod engine {
-//    use pyo3::prelude::*;
-//
-//    /// Formats the sum of two numbers as string.
-//    #[pyfunction]
-//    fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-//        Ok((a + b).to_string())
-//    }
-//}
