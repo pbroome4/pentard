@@ -281,6 +281,7 @@ impl GameState<usize> for PenteState{
     }
     
     fn apply_action(&mut self, action: &usize){
+        println!("Applying action {}", action);
         let (row,col) = PenteState::action_2_coord(action);
         if self.is_black_{
             self.board_[row][col] = Piece::Black;

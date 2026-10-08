@@ -38,7 +38,7 @@ fn main(){
     let mut brd = PenteState::new();
     loop{
         print!("{}", brd);
-        mcts(&brd, 1);
+        mcts(&brd, 10);
         let player: &str = brd.active_plyr_str();
         print!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();
