@@ -24,7 +24,7 @@ impl<A> fmt::Display for MctsNode<A>{
         if self.visits_ > 0{
             avg_val = self.total_value_ / (self.visits_ as f32);
         }
-        write!(f, "node_id: {}   visits: {}   avg_value: {}   is_expanded: {}",self.id_, self.visits_, avg_val, self.is_expanded_);
+        write!(f, "node_id: {}   visits: {}   avg_value: {}   is_expanded: {}",self.id_, self.visits_, avg_val, self.is_expanded_)?;
         return Ok(());
     }
 }
@@ -67,13 +67,12 @@ impl<A> MctsTree<A>{
 
     pub fn is_expanded(&self, node_id: NodeId) -> Option<bool>{
         let node = self.nodes_.get(node_id)?;
-        return Some(node.first_child_ == None);
+        return Some(node.is_expanded_);
     }
 
     pub fn expand(&mut self, node_id: NodeId, actions: Vec<A>){
-        for action in actions.into_iter(){{
+        for action in actions.into_iter(){
                 self.add_child(action, node_id);
-            }
         }
         if let Some(node) = self.nodes_.get_mut(node_id){
             node.is_expanded_ = true;
@@ -98,9 +97,7 @@ impl<A> MctsTree<A>{
                 ucb_id = child_id;
             }else if ucb_test == ucb_val{
                 count += 1;
-                let p = 1.0 / (count as f32);
-                let mut rng = rand::rng();
-                if rng.random_range(0.0..1.0) < p {    // resevoir sampling
+                if rand::rng().random_range(0..count) == 0 {    // resevoir sampling
                     ucb_id = child_id;
                 }
             }
@@ -128,7 +125,7 @@ impl<A> MctsTree<A>{
         let mut ret = Some(f32::INFINITY);
         if cnode.visits_ > 0{
             ret = Some((cnode.total_value_ / (cnode.visits_ as f32)) +
-                   c * ((pnode.visits_ / cnode.visits_) as f32).ln().sqrt() );
+                   c * ((pnode.visits_ as f32).ln() / cnode.visits_ as f32).sqrt());
         }
         return ret;
     }

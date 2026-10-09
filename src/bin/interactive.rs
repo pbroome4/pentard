@@ -40,7 +40,7 @@ fn read_move() -> Result<(usize, usize), String>{
 
 fn main(){
     tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::DEBUG) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
+        .with_max_level(LevelFilter::INFO) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
         .init();
 
     let mut brd = PenteState::new();
