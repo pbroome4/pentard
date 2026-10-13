@@ -1,9 +1,9 @@
 use std::fmt;
 use tracing::{trace, debug, info};
+use rand::prelude::*;
 
-
-pub const ROWS:usize = 19;
-pub const COLS:usize = 19;
+pub const ROWS:usize = 9;
+pub const COLS:usize = 9;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,9 +15,12 @@ pub enum Piece{
     Sentinel = 3, 
 }
 
-pub trait GameState<A>{
+pub trait GameState<A>: Clone{
     // Get vector of legal actions 
     fn get_actions(&self) -> Vec<A>;
+
+    // Get a random legal action (sampled uniformly)
+    fn get_random_action(&self) -> Option<A>;
 
     // Apply an action. action MUST be a legal action.
     fn apply_action(&mut self, action: &A);
@@ -26,12 +29,10 @@ pub trait GameState<A>{
     fn is_terminal(&self) -> bool;
 
     // Get the terminal value
-    fn get_terminal_value(&self) -> i32;
- 
-    // Perform a deep copy of the GameState
-    fn clone(&self) -> Self;     
+    fn get_terminal_value(&self) -> i32;     
 }
 
+#[derive(Clone)]
 pub struct PenteState{
     board_: [[Piece; COLS]; ROWS],
     b_caps_: u8, 
@@ -186,6 +187,23 @@ impl GameState<usize> for PenteState{
         }
         return v;
     }
+
+    // Get a random legal action (sampled uniformly)
+    fn get_random_action(&self) -> Option<usize>{
+        let mut action = None;
+        let mut actions_count = 0;
+        for row in 0..ROWS{
+            for col in 0..COLS{
+                if self.board_[row][col] == Piece::Empty{
+                    actions_count += 1;
+                    if rand::rng().random_range(0..actions_count) == 0{
+                        action = Some(PenteState::coord_2_action(row,col));
+                    }
+                }
+            }
+        }
+        return action;
+    }
     
     fn apply_action(&mut self, action: &usize){
         trace!("Applying action {}", action);
@@ -219,16 +237,16 @@ impl GameState<usize> for PenteState{
     }
 
 
-    fn clone(&self) -> Self{
-        return Self{
-            board_: self.board_.clone(),
-            b_caps_: self.b_caps_,
-            w_caps_: self.w_caps_,
-            is_black_: self.is_black_,
-            num_pieces_: self.num_pieces_,
-            is_terminal_:self.is_terminal_
-        }
-    } 
+    //fn clone(&self) -> Self{
+    //    return Self{
+    //        board_: self.board_.clone(),
+    //        b_caps_: self.b_caps_,
+    //        w_caps_: self.w_caps_,
+    //        is_black_: self.is_black_,
+    //        num_pieces_: self.num_pieces_,
+    //        is_terminal_:self.is_terminal_
+    //    }
+    //} 
 }
 
 
