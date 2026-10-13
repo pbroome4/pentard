@@ -154,10 +154,7 @@ impl<A> MctsTree<A>{
 
 fn random_rollout<A>(state: &mut impl engine::GameState<A>) -> i32{
     while !state.is_terminal(){
-        let actions = state.get_actions();
-        let mut rng = rand::rng();
-        let rand_index = rng.random_range(0..actions.len()); 
-        let action = &actions[rand_index];
+        let action = state.get_random_action().unwrap();
         state.apply_action(&action);
     }
     return state.get_terminal_value();
