@@ -236,17 +236,6 @@ impl GameState<usize> for PenteState{
         return 0;
     }
 
-
-    //fn clone(&self) -> Self{
-    //    return Self{
-    //        board_: self.board_.clone(),
-    //        b_caps_: self.b_caps_,
-    //        w_caps_: self.w_caps_,
-    //        is_black_: self.is_black_,
-    //        num_pieces_: self.num_pieces_,
-    //        is_terminal_:self.is_terminal_
-    //    }
-    //} 
 }
 
 
