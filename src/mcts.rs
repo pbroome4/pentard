@@ -152,7 +152,7 @@ impl<A> MctsTree<A>{
 }
 
 
-fn random_rollout<A>(state: &mut impl engine::GameState<A>) -> i32{
+fn random_rollout(state: &mut impl engine::GameState) -> i32{
     while !state.is_terminal(){
         let action = state.get_random_action().unwrap();
         state.apply_action(&action);
@@ -160,7 +160,7 @@ fn random_rollout<A>(state: &mut impl engine::GameState<A>) -> i32{
     return state.get_terminal_value();
 }
 
-fn mcts_sim<A>(tree: &mut MctsTree<A>, state_orig: &impl engine::GameState<A>, max_depth: usize) -> Option<()>{
+fn mcts_sim(tree: &mut MctsTree<usize>, state_orig: &impl engine::GameState, max_depth: usize) -> Option<()>{
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
     let mut depth = 0;
@@ -169,7 +169,7 @@ fn mcts_sim<A>(tree: &mut MctsTree<A>, state_orig: &impl engine::GameState<A>, m
         if let Some(node) = tree.get(node_id){
             if node.visits_>= 1 && !node.is_expanded_{
                 debug!("Expanding {}", node);
-                tree.expand(node_id, state.get_actions());
+                tree.expand(node_id, state.legal_actions());
                 let node = tree.get(node_id)?;
                 debug!("Expanded {}", node);
             }
@@ -191,8 +191,8 @@ fn mcts_sim<A>(tree: &mut MctsTree<A>, state_orig: &impl engine::GameState<A>, m
 }
 
 
-pub fn mcts<A>(state: &impl engine::GameState<A>, num_sims: u64) -> Option<()>{
-    let mut tree: MctsTree<A> = MctsTree::new();
+pub fn mcts(state: &impl engine::GameState, num_sims: u64) -> Option<()>{
+    let mut tree: MctsTree<usize> = MctsTree::new();
     for i in 0..num_sims{
         mcts_sim(&mut tree, state, 100);
     }

@@ -15,15 +15,15 @@ pub enum Piece{
     Sentinel = 3, 
 }
 
-pub trait GameState<A>: Clone{
+pub trait GameState: Clone{
     // Get vector of legal actions 
-    fn get_actions(&self) -> Vec<A>;
+    fn legal_actions(&self) -> Vec<usize>;
 
     // Get a random legal action (sampled uniformly)
-    fn get_random_action(&self) -> Option<A>;
+    fn get_random_action(&self) -> Option<usize>;
 
     // Apply an action. action MUST be a legal action.
-    fn apply_action(&mut self, action: &A);
+    fn apply_action(&mut self, action: &usize);
 
     // Is the game over
     fn is_terminal(&self) -> bool;
@@ -39,8 +39,8 @@ pub struct PenteState{
     w_caps_: u8,
     is_black_: bool,
     num_pieces_: usize, // Number of pieces activly on the board.
-                      // Is redundant, since we could loop over board,
-                      // but maintined to minimize computation
+                        // Is redundant, since we could loop over board,
+                        // but maintined to minimize computation
     is_terminal_: Piece, // Empty is non-terminal.
                          // Colored Piece is terminal winners color.
                          // Sentinel is draw.
@@ -68,7 +68,7 @@ impl PenteState{
         (row, col)
     }
 
-
+    // Current player plays at provided space
     pub fn play(&mut self, row: usize, col: usize) -> bool{
         let action = PenteState::coord_2_action(row,col);
         if self.is_legal_action(&action){
@@ -88,10 +88,12 @@ impl PenteState{
         return PLYR_MAP[self.is_black_ as usize];
     }
 
+    // Is current player black
     pub fn is_black(&self) -> bool{
         return self.is_black_;
     }
 
+    // If current player played at row,col, would it be connect-5
     fn is_con5(&self, row: usize, col: usize) -> bool{
         let active = self.get_active_piece();
         let mut count:u32 = 1; // Vertical
@@ -121,7 +123,8 @@ impl PenteState{
         return false;
     }
 
-
+    // Safe method to grab piece occupying space. 
+    // If space is out of bounds it returns None.
     fn get_square(&self, row: i32, col: i32) -> Option<Piece>{
         if row < 0 || row >= (ROWS as i32) || col < 0 || col >= (COLS as i32) {
             return None
@@ -131,6 +134,8 @@ impl PenteState{
         return Some(self.board_[r][c]);
     }
 
+    // Check for captures due to current player playing at provided space,
+    // and remove the captured pieces.
     fn update_captures(&mut self, row: usize, col: usize) {
         let active = self.get_active_piece();
         let inactive = self.get_inactive_piece();
@@ -153,6 +158,7 @@ impl PenteState{
         }
     }
     
+    // Change players captures by delta.
     fn add_captures(&mut self, is_black:bool, delta: u8){
         if is_black{
             self.b_caps_ += delta;
@@ -161,22 +167,22 @@ impl PenteState{
         }
     }
 
+    // Get active player as a Piece
     fn get_active_piece(&self) -> Piece{
         const PIECE_MAP: [Piece; 2] = [Piece::White, Piece::Black];
         return PIECE_MAP[self.is_black_ as usize]
     }
 
-
+    // Get inactive player as a Piece
     fn get_inactive_piece(&self) -> Piece{
         const PIECE_MAP: [Piece; 2] = [Piece::Black, Piece::White];
         return PIECE_MAP[self.is_black_ as usize]
     }
-
-    
 }
 
-impl GameState<usize> for PenteState{
-    fn get_actions(&self) -> Vec<usize>{
+
+impl GameState for PenteState{
+    fn legal_actions(&self) -> Vec<usize>{
         let mut v = Vec::with_capacity(ROWS*COLS);
         for row in 0..ROWS{
             for col in 0..COLS{
