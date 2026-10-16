@@ -6,41 +6,66 @@ from collections import deque
 import random
 import math
 from dataclasses import dataclass
+from typing import List
 
-import engine
-
-# if GPU is to be used
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else
-    "mps" if torch.backends.mps.is_available() else
-    "cpu"
-)
-
-#class ReplayMemory(object):
-#    def __init__(self, capacity):
-#        self.memory = deque([], maxlen=capacity)
+##################################################
+#        ### Python thread 1 ####
+#   1) Sample training data from replay buffer
+#   2) update network
 #
-#    def push(self, *args):
-#        """Save a transition"""
-#        self.memory.append(Transition(*args))
-#
-#    def sample(self, batch_size):
-#        return random.sample(self.memory, batch_size)
-#
-#    def __len__(self):
-#        return len(self.memory)
+#       #### Python Thread 2 ###
+#   1) Create batch of games at starting position (start with batch size 1)
+#   2) Call rust library to run MCTS
+#       2.1) For each game, Run N(=800, 1600 etc?) MCTS runouts
+#            This MCTS requires network prior and value output for PUCT
+#       2.2) Rust will queue up batch of network requests and calls python network
+#       2.3) At the end of N MCTS runouts, make best move found for the game. 
+#       2.3) repeat until all games end
+#       2.4) Return training data IE:
+#            For each state in each game, return (state, win/loss/draw),
+#            network value, actual game terminal value(win/loss).
+#   3) Add training data to a replay buffer
+#   4) Resync with thread1 model which has had aditional training
+#      
+
+# TODO Move to Rust
+@dataclass
+class TrainingDatum:
+    # TODO state: tensor of the current state?
+    # mcts_policy: Policy after performing mcts
+    # outcome:  Game win/loss/draw
+    pass
 
 
-class Pentard(nn.Module):
+class TrainingDataset(object):
+    def __init__(self, capacity):
+        self.memory = deque([], maxlen=capacity)
+
+    def push(self, data: List[TrainingDatum]):
+        """Save a transition"""
+        self.memory.append(data)
+
+    def sample(self, batch_size):
+        return random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
+
+
+class Tard(nn.Module):
+    """General AlphaZero inspired nueral-network"""
     def __init__(self, in_chan=4):
         """
-        in_chan should match the to_tensor function of the GameState
         """
-        super(Pentard, self).__init__()
+        super(Tard, self).__init__()
         
         # 1. Shared Feature Extractor (Convolutional Trunk)
+        #    Input is shape (batch_size, input_channels, board_width, board_height)
+        # Output shape (batch_size, 64, board_width, board_height)
         self.conv1 = nn.Conv2d(in_chan, 64, kernel_size=3, padding=1)
+        # Output shape (batch_size, 64, board_width, board_height)
         self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        # Output shape (batch_size, 64, board_width, board_height)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
         
         # Batch normalization helps stabilize training
@@ -49,26 +74,30 @@ class Pentard(nn.Module):
         self.bn3 = nn.BatchNorm2d(64)
 
         # 2. Policy Head (Decides which move to make)
+        # Output shape (batch_size, 2, board_width, board_height)
         self.policy_conv = nn.Conv2d(64, 2, kernel_size=1) # Reduce channels to 2
         self.policy_bn = nn.BatchNorm2d(2)
+        # Output shape (batch_size, board_width*board_height) but previous layer needs flattening
         self.policy_fc = nn.Linear(2 * engine.action_space_size(), engine.action_space_size())
 
         # 3. Value Head (Evaluates who is winning: -1 to +1)
+        # Output shape (batch_size, 1, board_width, board_height)
         self.value_conv = nn.Conv2d(64, 1, kernel_size=1)  # Reduce channels to 1
         self.value_bn = nn.BatchNorm2d(1)
+        # Output shape (batch_size, board_width*board_height) but previous layer needs flattening
         self.value_fc1 = nn.Linear(1 * engine.action_space_size(), 64)
-        self.value_fc2 = nn.Linear(64, 1)
+        # Output Shape (batch_size, 1)
+        self.value_fc2 = nn.Linear(engine.action_space_size(), 1)
+
 
     def forward(self, x):
-        # x shape: (batch_size, input_channels, board_size, board_size)
-        
         # Trunk forward pass
         x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.bn2(self.conv2(x)))  
+        x = F.relu(self.bn3(self.conv3(x)))  
 
         # Policy Head forward pass
-        p = F.relu(self.policy_bn(self.policy_conv(x)))
+        p = F.relu(self.policy_bn(self.policy_conv(x))) # shape (batch_size, 2, )
         p = p.view(p.size(0), -1)  # Flatten
         policy = F.softmax(self.policy_fc(p), dim=1)  # Outputs probability distribution over moves
 
@@ -81,59 +110,43 @@ class Pentard(nn.Module):
         return policy, value
 
 
+    def evaluate(self, rust_game_batch):
+        """
+        Uses the network to evaluate a batch of games
+        rust_game_batch: numpy array representation of Tensor to pass through network.
+        Returns: List[policy, value]
+            For each game state in the batch, return the network policy and value output
+        """
+        data = None
+        with torch.no_grad:
+            data = self(rust_game_batch) # Calls self.forward(), and some other behind the scenes stuff
+            #TODO maybe modify data to make it rust friendly?
+        return data
 
 
-memory = ReplayMemory(10000)
+def train_tard():
+    # if GPU is to be used
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tard = Tard()
+    optimizer = optim.Adam(tard.parameters(), lr=0.001, weight_decay=1e-4)
+    dataset = TrainingDataset(10000)
 
 
-### Training loop
-if torch.cuda.is_available() or torch.backends.mps.is_available():
-    n_episodes = 10
-else:
-    n_episodes = 10
+    iteration_n = 0
+    while True:
+        iteration_n += 1
+        print(f"Iteration {iteration_n}")
+        tard.eval() # Temporarily turn off training (specifically weight decay)
+        with torch.no_grad: # Temporarily turn off training (Specifically gradient tracking)
+            # TODO
+            # training_data = run_self_play(tard.evaluate, batch_size, N)
+            # dataset.append(training_data) # Is thread_safe
+            pass
 
-for i_episode in range(n_episodes):
-    game_state = engine.GameState()
-    state_tens = game_state.to_tensor()
+
+if __name__=="__main__":
+    train_tard()
 
 
-for i_episode in range(n_episodes):
-    # Initialize the environment and get its state
-    state, info = env.reset()
-    state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
-    for t in count():
-        action = select_action(state)
-        observation, reward, terminated, truncated, _ = env.step(action.item())
-        reward = torch.tensor([reward], device=device)
-        done = terminated or truncated
 
-        if terminated:
-            next_state = None
-        else:
-            next_state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(0)
 
-        # Store the transition in memory
-        memory.push(state, action, next_state, reward)
-
-        # Move to the next state
-        state = next_state
-
-        # Perform one step of the optimization (on the policy network)
-        optimize_model()
-
-        # Soft update of the target network's weights
-        # θ′ ← τ θ + (1 −τ )θ′
-        target_net_state_dict = target_net.state_dict()
-        policy_net_state_dict = policy_net.state_dict()
-        for key in policy_net_state_dict:
-            target_net_state_dict[key] = policy_net_state_dict[key]*TAU + target_net_state_dict[key]*(1-TAU)
-        target_net.load_state_dict(target_net_state_dict)
-
-        if done:
-            episode_durations.append(t + 1)
-            plot_durations()
-            break
-
-print('Complete')
-plot_durations(show_result=True)
-plt.ioff()
