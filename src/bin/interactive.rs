@@ -6,7 +6,7 @@ use tracing::Level;
 use tracing_subscriber;
 use clap::Parser;
 
-use pentard::engine::*;
+use pentard::pente::*;
 use pentard::mcts::*;
 
 #[derive(Parser, Debug)]
@@ -62,7 +62,7 @@ fn main(){
     let mut brd = PenteState::new();
     loop{
         info!("\n{}", brd);
-        mcts(&brd, args.n);
+        //mcts(&brd, args.n);
         let player: &str = brd.active_plyr_str();
         info!("Enter move for {player} as row, col: ");
         io::stdout().flush().unwrap();
