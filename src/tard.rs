@@ -1,24 +1,10 @@
-use tch::nn::{self, BatchNormConfig, LinearConfig, OptimizerConfig, linear};
+use tch::nn::{self, BatchNormConfig, LinearConfig, linear};
 use tch::Tensor;
 use tracing::info;
-////////////////////////////////////////
-//       ### Thread 1 ####
-//   1) Sample training data from replay buffer
-//   2) update network
-//
-//       #### Thread 2 ###
-//   1) Create batch of games at starting position (start with batch size 1)
-//   2) Call library to run MCTS
-//       2.1) For each game, Run N(=800, 1600 etc?) MCTS runouts
-//            This MCTS requires network prior and value output for PUCT
-//       2.2) At the end of N MCTS runouts, make best move found for the game. 
-//       2.3) repeat until all games end
-//       2.4) Return training data IE:
-//            For each state in each game, return (state, win/loss/draw),
-//            network value, actual game terminal value(win/loss).
-//   3) Add training data to a replay buffer
-//   4) Resync with thread1 model which has had aditional training
-//      
+use arraydeque::ArrayDeque;
+use rand::RngExt;
+use std::ops::Deref;
+
 
 #[derive(Debug)]
 pub struct Tard{
@@ -99,4 +85,51 @@ impl Tard{
     }
 }
 
+pub struct TrainingElement{
+    pub state: tch::Tensor,       
+    pub mcts_policy: tch::Tensor,
+    pub outcome: i32,
+}
 
+impl Clone for TrainingElement{
+    fn clone(&self) -> Self {
+        return Self {
+            state: self.state.copy(),
+            mcts_policy: self.mcts_policy.copy(),
+            outcome: self.outcome
+        };
+    }
+}
+
+pub struct TrainingBuffer<const CAP: usize>{
+    memory_: ArrayDeque<TrainingElement, CAP>,
+}
+
+
+impl<const CAP: usize> TrainingBuffer<CAP> {
+    pub fn new() -> Self {
+        return Self{
+            memory_: ArrayDeque::<TrainingElement, CAP>::new(),
+        };
+    }
+
+    pub fn sample(&self, size: usize) -> Vec<TrainingElement> {
+        let mut v = Vec::<TrainingElement>::new();
+        let l = self.memory_.len();
+        if l > 0{
+            for _ in 0..size {
+                let i = rand::rng().random_range(0..l);                
+                v.push(self.memory_[i].clone());
+            }
+        }
+        return v;
+    }
+}
+
+// Transparently expose all other ArrayDeque methods
+impl <const CAP: usize> Deref for TrainingBuffer<CAP>{
+    type Target = ArrayDeque<TrainingElement, CAP>;
+    fn deref(&self) -> &Self::Target {
+        &self.memory_
+    }
+}
