@@ -51,6 +51,7 @@ pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size:u32, n:u32) -> Ve
             mcts_policy:  &leg_acts_mask / &num_leg_acts,
             outcome: 0,
         };
+        te_vec.push(te);
         g.apply_action(g.get_random_action());
         move_n += 1;
     }

@@ -3,7 +3,7 @@ use tch::Tensor;
 use tracing::info;
 use arraydeque::ArrayDeque;
 use rand::RngExt;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 
 #[derive(Debug)]
@@ -130,5 +130,11 @@ impl <const CAP: usize> Deref for TrainingBuffer<CAP>{
     type Target = ArrayDeque<TrainingElement, CAP>;
     fn deref(&self) -> &Self::Target {
         &self.memory_
+    }
+}
+
+impl <const CAP: usize> DerefMut for TrainingBuffer<CAP>{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        return &mut self.memory_;
     }
 }

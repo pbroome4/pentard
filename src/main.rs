@@ -45,16 +45,18 @@ fn train_tard(){
     }
     let vs = nn::VarStore::new(device);
     let tard = tard::Tard::new(&vs.root(), 3);
-    let mut optimizer = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
+    let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
+    let mut trn_buf = tard::TrainingBuffer::<10000>::new();
 
-    let mut iteration_n:u32 = 0;
+    let mut iter_n: u32 = 0;
     while true{
-        info!("Iteration {}", iteration_n);
+        info!("Iteration {}", iter_n);
         let _gaurd = tch::no_grad(||{
             let training_data = engine::run_self_play::<PenteState>(&tard, 1, 800);
-            // dataset.append(training_data) # Is thread_safe
+            trn_buf.extend_front(training_data);
+            debug!("TrainingBuffer size: {}", trn_buf.len());
         });
-        iteration_n += 1;
+        iter_n += 1;
         break;
     }
 }
