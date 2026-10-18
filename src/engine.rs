@@ -1,7 +1,7 @@
 use tch::{Kind, Tensor};
 use rand::prelude::*;
 use tracing::{trace, debug, info};
-use std::{fmt, intrinsics::sqrtf32, string::ParseError};
+use std::{fmt};
 
 use crate::tard;
 
@@ -69,11 +69,11 @@ pub fn mcts(state: &impl GameState, t: &tard::Tard, num_sims: u32) -> (){
         mcts_sim(&mut tree, state, t);
     }
     let root = tree.get(0).unwrap();
-    debug!("{}", root);
+    trace!("{}", root);
 }
 
 // Performs a single MCTS simulation using PUCT
-fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard) -> Option<()>{
+fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard){
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
     loop{ // Drill down to a leaf node.
@@ -89,29 +89,13 @@ fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard) ->
     }
     // Is leaf node (possibly terminal)
     let node = tree.get(node_id).unwrap();
-    let reward = 
+    let value = 
         if state.is_terminal(){
             state.get_terminal_value() as f32
         }else{
             tree.expand(node_id, &state, t)
         };
-    
-    
-    
-    //    let node = tree.get(node_id)?;
-    //    if !node.is_expanded_{ break;}
-    //    let Some(next_node_id) = tree.pick_ucb(node_id) else {break;};
-    //    let next_node = tree.get(next_node_id)?;
-    //    let Some(action) = next_node.action_.as_ref() else { break;};
-    //    state.apply_action(action);
-    //    node_id = next_node_id;
-    //    depth +=1;
-    //    debug!("mcts_sim depth {}", depth);
-    //} // node_id should be leaf node.
-    //let reward = random_rollout(&mut state);
-    //debug!("reward: {}", reward);
-    //tree.backprop(node_id, reward);    
-    return Some(());
+    tree.back_propogate(node_id, value); 
 }
 
 
@@ -175,12 +159,25 @@ impl MctsTree{
         return x;
     }
     
-    pub fn get(&self, node_id:NodeId) -> Option<&MctsNode>{
+    pub fn get(&self, node_id: NodeId) -> Option<&MctsNode>{
         return self.nodes_.get(node_id);
     }
 
-    pub fn get_mut(&mut self, node_id:NodeId) -> Option<&mut MctsNode>{
+    pub fn get_mut(&mut self, node_id: NodeId) -> Option<&mut MctsNode>{
         return self.nodes_.get_mut(node_id);
+    }
+
+    pub fn back_propogate(&mut self, node_id: NodeId, value: f32){
+        let mut curr_id = node_id;
+        while let Some(curr) = self.get_mut(curr_id){
+            curr.value += value;
+            curr.visits += 1;
+            if let Some(parent_id) = curr.parent{
+                curr_id = parent_id;
+            }else{
+                break;
+            }
+        }
     }
 
     // Returns probabilistic upper confidence bound applied to trees (PUCT)
@@ -196,7 +193,7 @@ impl MctsTree{
             if let Some(child) = self.get(child_id){
                 if let Some(next_child_id) = child.next_sibling{
                     child_id = next_child_id;
-                    score = self.calc_puct(child_id);
+                    let score = self.calc_puct(child_id);
                     if score > best_score{
                         best_child_id = child_id;
                         best_score = score;
@@ -222,7 +219,7 @@ impl MctsTree{
             }else{
                 node.value / (node.visits as f32)
             };
-        let exploration_term = c * node.prior * sqrtf32(parent.visits as f32) / ((1 + node.visits) as f32);
+        let exploration_term = c * node.prior * (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
         return exploitation_term + exploitation_term;
     }
     
@@ -231,7 +228,7 @@ impl MctsTree{
     // Returns the value of the node
     fn expand(&mut self, node_id:NodeId, state: &impl GameState, t: &tard::Tard) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
-        debug!("Expanding node {}", node_id);
+        trace!("Expanding node {}", node_id);
         let state_tens = state.to_tensor();
         let in_tens = Tensor::stack(&[state_tens], 0);  // Make a batchsize of 1
         let (p_batch, v_batch) = t.forward_t(&in_tens, false);
@@ -262,7 +259,7 @@ impl MctsTree{
         };
         self.nodes_.push(child);
         self.nodes_[parent].first_child = Some(child_id);
-        debug!("Added child {}", child_id);
+        trace!("Added child {}", child_id);
         return child_id;
     }
 }
