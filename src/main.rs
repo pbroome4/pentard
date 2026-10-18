@@ -9,6 +9,7 @@ mod engine;
 mod pente;
 
 use pente::PenteState;
+use engine::GameState;
 ////////////////////////////////////////
 //       ### Thread 1 ####
 //   1) Sample training data from replay buffer
@@ -44,7 +45,7 @@ fn train_tard(){
         _ => println!("Using device: {:?}", device),
     }
     let vs = nn::VarStore::new(device);
-    let tard = tard::Tard::new(&vs.root(), pente::N_TENSOR_CHANNELS as i64);
+    let tard = tard::Tard::new(&vs.root(), PenteState::N_TENSOR_CHANNELS as i64);
     let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
     let mut trn_buf = tard::TrainingBuffer::<1000>::new();
 

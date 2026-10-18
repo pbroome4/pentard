@@ -96,15 +96,15 @@ impl Tard{
 
 pub struct TrainingElement{
     pub state: tch::Tensor,       
-    pub mcts_policy: tch::Tensor,
-    pub outcome: i32,
+    pub mcts_posterior: tch::Tensor,
+    pub outcome: f32,
 }
 
 impl Clone for TrainingElement{
     fn clone(&self) -> Self {
         return Self {
             state: self.state.copy(),
-            mcts_policy: self.mcts_policy.copy(),
+            mcts_posterior: self.mcts_posterior.copy(),
             outcome: self.outcome
         };
     }

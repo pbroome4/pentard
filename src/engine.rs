@@ -3,15 +3,16 @@ use rand::prelude::*;
 use tracing::{trace, debug, info};
 use std::{fmt};
 
-use crate::tard;
+use crate::tard::{self, TrainingElement};
 
 type Action = usize;
 pub trait GameState: Clone{
+    const ACTN_SPC_SIZE: usize;
+    const N_TENSOR_CHANNELS: usize;
+
     fn new() -> Self;
 
     fn to_tensor(&self) -> Tensor;
-
-    fn action_space_size(&self) -> usize;
 
     // usize tensor of 0's and 1's. 0=illegal. 1=legal
     fn legal_actions_mask(&self) -> Tensor;
@@ -49,27 +50,34 @@ pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size: u32, num_sims: u
     let mut move_n = 0;
     while !state.is_terminal(){
         debug!("Move {}", move_n);
-        mcts(&state, t, num_sims);
+        let mcts_posterior = mcts(&state, t, num_sims);
+        let te = TrainingElement{
+            state: state.to_tensor(),
+            mcts_posterior: mcts_posterior,
+            outcome: 0.0,
+        };
+        te_vec.push(te);
         state.apply_action(state.get_random_action());
         move_n += 1;
     }
-    let outcome = state.get_terminal_value();
-    let mut polarity = 1;
+    let outcome = state.get_terminal_value() as f32;
+    let mut polarity: f32 = 1.0;
     for te in te_vec.iter_mut(){
         te.outcome = outcome * polarity;
-        polarity *= -1;
+        polarity *= -1.0;
     }
     return te_vec;
 }
-
-pub fn mcts(state: &impl GameState, t: &tard::Tard, num_sims: u32) -> (){
+// Run MCTS from the current state. State must be non-terminal. num sims >= 1
+pub fn mcts <GS: GameState> (state: &GS, t: &tard::Tard, num_sims: u32) -> Tensor{
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new();
     for i in 0..num_sims{
         mcts_sim(&mut tree, state, t);
     }
     let root = tree.get(0).unwrap();
-    trace!("{}", root);
+    debug!("Root node: {}", root);
+    return mcts_tree_posterior(&tree, 0, GS::ACTN_SPC_SIZE);
 }
 
 // Performs a single MCTS simulation using PUCT
@@ -96,6 +104,25 @@ fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard){
             tree.expand(node_id, &state, t)
         };
     tree.back_propogate(node_id, value); 
+}
+
+
+fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Tensor{
+    let node = tree.get(node_id).unwrap();
+    let mut child_id = node.first_child.unwrap(); // state assumed non-terminal and sims >= 1
+    let mut p = vec![0.0; actn_spc_size];
+    loop{
+        let child = tree.get(child_id).unwrap();
+        let action = child.action.unwrap();
+        p[action] = (child.visits as f32) / (node.visits as f32);
+        if let Some(next_child_id) = child.next_sibling{
+            child_id = next_child_id;
+        }else{
+            break;
+        }
+    }
+    let t = Tensor::from_slice(&p).exp(); // convert to log probability
+    return t;
 }
 
 
@@ -167,7 +194,8 @@ impl MctsTree{
         return self.nodes_.get_mut(node_id);
     }
 
-    pub fn back_propogate(&mut self, node_id: NodeId, value: f32){
+
+    fn back_propogate(&mut self, node_id: NodeId, value: f32){
         let mut curr_id = node_id;
         while let Some(curr) = self.get_mut(curr_id){
             curr.value += value;

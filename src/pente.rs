@@ -7,8 +7,6 @@ use crate::engine::GameState;
 
 pub const ROWS:usize = 9;
 pub const COLS:usize = 9;
-pub const ACTN_SPC_SIZE:usize = ROWS*COLS;
-pub const N_TENSOR_CHANNELS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -34,6 +32,9 @@ pub struct PenteState{
 }
 
 impl GameState for PenteState{
+    const ACTN_SPC_SIZE: usize = ROWS*COLS;
+    const N_TENSOR_CHANNELS: usize = 4;
+
     fn new() -> Self{
         return PenteState::new();
     }
@@ -44,7 +45,7 @@ impl GameState for PenteState{
     // channel 2 is captures of active player
     // channel 3 is captures of inactive player
     fn to_tensor(&self) -> Tensor {
-        let mut a = [[[0.0; COLS]; ROWS]; N_TENSOR_CHANNELS];
+        let mut a = [[[0.0; COLS]; ROWS]; Self::N_TENSOR_CHANNELS];
         let b_chan = if self.is_black() {0} else {1};
         let w_chan = if self.is_black() {1} else {0}; 
         for r in 0..ROWS{
@@ -59,19 +60,15 @@ impl GameState for PenteState{
             }
         }
         let flat_slice = unsafe {
-            std::slice::from_raw_parts(a.as_ptr() as *const f32, N_TENSOR_CHANNELS * ROWS * COLS)
+            std::slice::from_raw_parts(a.as_ptr() as *const f32, Self::N_TENSOR_CHANNELS * ROWS * COLS)
         };
         let t = Tensor::from_slice(flat_slice).reshape(&[4 as i64, ROWS as i64, COLS as i64]);
         return t;
     }
 
-    fn action_space_size(&self) -> usize {
-        return ACTN_SPC_SIZE;
-    }
-
     fn legal_actions_mask(&self) -> tch::Tensor {
-        let mut v = [0; ACTN_SPC_SIZE];
-        for i in 0..self.action_space_size(){
+        let mut v = [0; Self::ACTN_SPC_SIZE];
+        for i in 0..Self::ACTN_SPC_SIZE{
             if self.is_legal_action(i){
                 v[i] = 1;
             }
