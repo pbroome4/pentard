@@ -70,10 +70,10 @@ impl GameState for PenteState{
     }
 
     fn legal_actions_mask(&self) -> tch::Tensor {
-        let mut v = [false; ACTN_SPC_SIZE];
+        let mut v = [0; ACTN_SPC_SIZE];
         for i in 0..self.action_space_size(){
             if self.is_legal_action(i){
-                v[i] = true;
+                v[i] = 1;
             }
         }
         let t = Tensor::from_slice(&v);

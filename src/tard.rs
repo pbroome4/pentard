@@ -1,5 +1,5 @@
 use tch::nn::{self, BatchNormConfig, ConvConfig, LinearConfig, linear};
-use tch::Tensor;
+use tch::{Tensor, Kind};
 use tracing::{trace, debug, info};
 use arraydeque::ArrayDeque;
 use rand::RngExt;
@@ -18,6 +18,7 @@ pub struct Tard{
     bn3: nn::BatchNorm,
 
     // 2. Policy Head (Decides which move to make)
+    // Output log probability of move to make
     policy_conv: nn::Conv2D,
     policy_bn: nn::BatchNorm,
     policy_fc: nn::Linear,
@@ -79,7 +80,8 @@ impl Tard{
                  .apply_t(&self.policy_bn, train)
                  .relu()
                  .flatten(1, -1)
-                 .apply(&self.policy_fc);
+                 .apply(&self.policy_fc)
+                 .log_softmax(-1, Kind::Float);
         let v = x.apply(&self.value_conv)
                  .apply_t(&self.value_bn, train)
                  .relu()
