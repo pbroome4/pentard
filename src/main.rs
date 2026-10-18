@@ -1,10 +1,59 @@
 use tracing::{Level, debug, info};
 use tracing_subscriber;
-use pentard;
+use tch::IValue::Device;
+use tch::nn::{self, BatchNormConfig, LinearConfig, OptimizerConfig, linear};
+use tch::Tensor;
+
+mod tard;
+mod engine;
+mod pente;
+
+////////////////////////////////////////
+//       ### Thread 1 ####
+//   1) Sample training data from replay buffer
+//   2) update network
+//
+//       #### Thread 2 ###
+//   1) Create batch of games at starting position (start with batch size 1)
+//   2) Call library to run MCTS
+//       2.1) For each game, Run N(=800, 1600 etc?) MCTS runouts
+//            This MCTS requires network prior and value output for PUCT
+//       2.2) At the end of N MCTS runouts, make best move found for the game. 
+//       2.3) repeat until all games end
+//       2.4) Return training data IE:
+//            For each state in each game, return (state, win/loss/draw),
+//            network value, actual game terminal value(win/loss).
+//   3) Add training data to a replay buffer
+//   4) Resync with thread1 model which has had aditional training
+//      
+
 
 fn main(){
     tracing_subscriber::fmt()
         .with_max_level(Level::DEBUG) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
         .init();
-    pentard::tard::train_tard();
+    train_tard();
+}
+
+fn train_tard(){
+    let device = tch::Device::cuda_if_available();
+    match device {
+        tch::Device::Cpu => info!("CUDA is not available. Falling back to CPU."),
+        tch::Device::Cuda(id) => info!("CUDA is available! Using GPU device ID: {}", id),
+        _ => println!("Using device: {:?}", device),
+    }
+    let vs = nn::VarStore::new(device);
+    let tard = tard::Tard::new(&vs.root(), 3);
+    let mut optimizer = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
+
+    let mut iteration_n:u32 = 0;
+    while true{
+        iteration_n += 1;
+        info!("Iteration {}", iteration_n);
+        let _gaurd = tch::no_grad(||{
+            let training_data = engine::run_self_play(&tard, 1, 800);
+            // dataset.append(training_data) # Is thread_safe
+        });
+        break;
+    }
 }

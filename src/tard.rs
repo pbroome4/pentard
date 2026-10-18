@@ -1,11 +1,6 @@
-use tch::IValue::Device;
 use tch::nn::{self, BatchNormConfig, LinearConfig, OptimizerConfig, linear};
 use tch::Tensor;
 use tracing::info;
-
-use crate::pente;
-
-
 ////////////////////////////////////////
 //       ### Thread 1 ####
 //   1) Sample training data from replay buffer
@@ -26,7 +21,7 @@ use crate::pente;
 //      
 
 #[derive(Debug)]
-struct Tard{
+pub struct Tard{
     // 1. Shared Feature Extractor (Convolutional Trunk)
     conv1: nn::Conv2D,
     conv2: nn::Conv2D,
@@ -79,11 +74,9 @@ impl Tard{
                     policy_conv, policy_bn, policy_fc,
                     value_conv, value_bn, value_fc1, value_fc2};
     }
-}
 
-//Basically impl nn::ModuleT except i want to return pair of Tensors
-impl Tard{
-    fn forward_t(&self, xs: &Tensor, train: bool) -> (Tensor,Tensor){
+    //Basically impl nn::ModuleT except i want to return pair of Tensors
+    pub fn forward_t(&self, xs: &Tensor, train: bool) -> (Tensor,Tensor){
         let x  = xs.apply(&self.conv1)
                    .apply_t(&self.bn1, train)
                    .relu()
@@ -106,23 +99,4 @@ impl Tard{
     }
 }
 
-pub fn train_tard(){
-    let device = tch::Device::cuda_if_available();
-    match device {
-        tch::Device::Cpu => info!("CUDA is not available. Falling back to CPU."),
-        tch::Device::Cuda(id) => info!("CUDA is available! Using GPU device ID: {}", id),
-        _ => println!("Using device: {:?}", device),
-    }
-    let vs = nn::VarStore::new(device);
-    let tard = Tard::new(&vs.root(), 3);
-    let mut optimizer = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
 
-    let mut iteration_n:u32 = 0;
-    while true{
-        iteration_n += 1;
-        info!("Iteration {}", iteration_n);
-        let _gaurd = tch::no_grad(||{
-            
-        });
-    }
-}

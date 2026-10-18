@@ -1,3 +1,7 @@
+use tracing::{debug, info};
+
+use crate::tard;
+
 pub trait GameState: Clone{
     // Get vector of legal actions 
     fn legal_actions(&self) -> Vec<usize>;
@@ -13,4 +17,9 @@ pub trait GameState: Clone{
 
     // Get the terminal value
     fn get_terminal_value(&self) -> i32;     
+}
+
+
+pub fn run_self_play(t: &tard::Tard, batch_size:u32, n:u32){
+    debug!("Running self play");
 }

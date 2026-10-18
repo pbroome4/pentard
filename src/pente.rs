@@ -2,6 +2,8 @@ use std::fmt;
 use tracing::{trace, debug, info};
 use rand::prelude::*;
 
+use crate::engine;
+
 pub const ROWS:usize = 9;
 pub const COLS:usize = 9;
 
@@ -226,7 +228,6 @@ impl PenteState{
     }
 
 }
-
 
 
 impl fmt::Display for PenteState {
