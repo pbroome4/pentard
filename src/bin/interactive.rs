@@ -7,6 +7,7 @@ use tracing_subscriber;
 use clap::Parser;
 
 use pentard::pente::*;
+use pentard::engine::*;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

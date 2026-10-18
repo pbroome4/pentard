@@ -105,7 +105,6 @@ pub struct TrainingBuffer<const CAP: usize>{
     memory_: ArrayDeque<TrainingElement, CAP>,
 }
 
-
 impl<const CAP: usize> TrainingBuffer<CAP> {
     pub fn new() -> Self {
         return Self{

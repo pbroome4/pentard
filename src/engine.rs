@@ -9,10 +9,12 @@ pub trait GameState: Clone{
 
     fn to_tensor(&self) -> Tensor;
 
+    fn action_space_size(&self) -> usize;
+
     fn legal_actions_mask(&self) -> Tensor;
 
     // Get vector of legal actions 
-    fn legal_actions(&self) -> Vec<usize>;
+    //fn legal_actions(&self) -> Vec<usize>;
 
     // Generate a random legal action (sampled uniformly)
     // Must only be called in non-terminal state.

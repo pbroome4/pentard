@@ -1,12 +1,13 @@
-use std::fmt;
+use std::{fmt};
 use tracing::{trace, debug, info};
 use rand::prelude::*;
+use tch::{Kind::{self, Float}, Tensor};
 
-use crate::engine;
+use crate::engine::GameState;
 
 pub const ROWS:usize = 9;
 pub const COLS:usize = 9;
-
+pub const ACTN_SPC_SIZE:usize = ROWS*COLS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -23,7 +24,7 @@ pub struct PenteState{
     b_caps_: u8, 
     w_caps_: u8,
     is_black_: bool,
-    num_pieces_: usize, // Number of pieces activly on the board.
+    num_pieces_: usize, // Number of pieces actively on the board.
                         // Is redundant, since we could loop over board,
                         // but maintined to minimize computation
     is_terminal_: Piece, // Empty is non-terminal.
@@ -31,8 +32,107 @@ pub struct PenteState{
                          // Sentinel is draw.
 }
 
+impl GameState for PenteState{
+    fn new() -> Self{
+        return PenteState::new();
+    }
+
+    fn to_tensor(&self) -> Tensor {
+        let mut a = [[[0.0; COLS]; ROWS]; 4];
+        let b_chan = if self.is_black() {0} else {1};
+        let w_chan = if self.is_black() {1} else {0}; 
+        for r in 0..ROWS{
+            for c in 0..COLS{
+                if self.board_[r][c] == Piece::Black{
+                    a[b_chan][r][c] = 1.0;
+                }else if self.board_[r][c] == Piece::White{
+                    a[w_chan][r][c] = 1.0;
+                }
+                a[b_chan+2][r][c] = self.b_caps_ as f32;
+                a[w_chan+2][r][c] = self.w_caps_ as f32;
+            }
+        }
+        let flat_slice = unsafe {
+            std::slice::from_raw_parts(a.as_ptr() as *const f32, 4*ROWS*COLS)
+        };
+        let t = Tensor::from_slice(flat_slice).reshape(&[4 as i64, ROWS as i64, COLS as i64]);
+        return t;
+    }
+
+    fn action_space_size(&self) -> usize {
+        return ACTN_SPC_SIZE;
+    }
+
+    fn legal_actions_mask(&self) -> tch::Tensor {
+        let mut v = [false; ACTN_SPC_SIZE];
+        for i in 0..self.action_space_size(){
+            if self.is_legal_action(i){
+                v[i] = true;
+            }//else{
+             //   v[i] = false;
+            //}
+        }
+        let t = Tensor::from_slice(&v);
+        return t;
+    }
+
+    fn get_random_action(&self) -> usize{
+        // Must only call in non-terminal state. 
+        // Calling in a terminal state is UB
+        // (here we opt to return usize::MAX so errors are visible quickly)
+        let mut action = usize::MAX;
+        let mut actions_count = 0;
+        for row in 0..ROWS{
+            for col in 0..COLS{
+                if self.board_[row][col] == Piece::Empty{
+                    actions_count += 1;
+                    if rand::rng().random_range(0..actions_count) == 0{
+                        action = coord_2_action(row,col);
+                    }
+                }
+            }
+        }
+        return action;
+    }
+    
+    fn apply_action(&mut self, action: usize){
+        trace!("Applying action {}", action);
+        let (row,col) = action_2_coord(action);
+        if self.is_black_{
+            self.board_[row][col] = Piece::Black;
+        }else{
+            self.board_[row][col] = Piece::White;
+        }
+        self.num_pieces_ += 1;
+        self.update_captures(row, col);
+        if self.b_caps_ == 5 || self.w_caps_ == 5 || self.is_con5(row,col){
+            self.is_terminal_ = self.get_active_piece()
+        }else if self.num_pieces_ == ROWS*COLS{
+            self.is_terminal_ = Piece::Sentinel;
+        }
+        self.is_black_ = !self.is_black_;
+    }
+    
+    fn is_terminal(&self) -> bool{
+        return self.is_terminal_ != Piece::Empty;
+    }
+    
+    fn get_terminal_value(&self, ) -> i32{
+        if self.is_terminal_ == Piece::Black{
+            return 1;
+        }else if self.is_terminal_ == Piece::White{
+            return -1;
+        }
+        return 0;
+    }
+
+
+}
+
+
 impl PenteState{
     pub fn new() -> Self{
+        trace!("Pente new()");
         Self{
             board_: [[Piece::Empty; COLS]; ROWS],
             b_caps_:  0,
@@ -43,29 +143,31 @@ impl PenteState{
         }
     }
 
-    fn coord_2_action(row: usize, col:usize) -> usize{
-        row*COLS + col
-    }
-
-    fn action_2_coord(action: &usize) -> (usize, usize){
-        let row = action/COLS;
-        let col = action - row*COLS;
-        (row, col)
-    }
-
     // Current player plays at provided space
     pub fn play(&mut self, row: usize, col: usize) -> bool{
-        let action = PenteState::coord_2_action(row,col);
-        if self.is_legal_action(&action){
-            self.apply_action(&action);
+        let action = coord_2_action(row,col);
+        if self.is_legal_action(action){
+            self.apply_action(action);
             return true;
         }
         return false;
     }
 
-    pub fn is_legal_action(&self, action: &usize) -> bool{
-        let (row, col) = PenteState::action_2_coord(action);
+    pub fn is_legal_action(&self, action: usize) -> bool{
+        let (row, col) = action_2_coord(action);
         return row < ROWS && col < COLS && self.board_[row][col] == Piece::Empty;
+    }
+    
+    fn legal_actions(&self) -> Vec<usize>{
+        let mut v = Vec::with_capacity(ROWS*COLS);
+        for row in 0..ROWS{
+            for col in 0..COLS{
+                if self.board_[row][col] == Piece::Empty{
+                    v.push(coord_2_action(row,col));
+                }
+            }
+        }
+        return v;
     }
 
     pub fn active_plyr_str(&self) -> &str{
@@ -165,69 +267,16 @@ impl PenteState{
     }
 }
 
-
-impl PenteState{
-    pub fn legal_actions(&self) -> Vec<usize>{
-        let mut v = Vec::with_capacity(ROWS*COLS);
-        for row in 0..ROWS{
-            for col in 0..COLS{
-                if self.board_[row][col] == Piece::Empty{
-                    v.push(PenteState::coord_2_action(row,col));
-                }
-            }
-        }
-        return v;
+fn coord_2_action(row: usize, col:usize) -> usize{
+        row*COLS + col
     }
 
-    // Get a random legal action (sampled uniformly)
-    pub fn get_random_action(&self) -> Option<usize>{
-        let mut action = None;
-        let mut actions_count = 0;
-        for row in 0..ROWS{
-            for col in 0..COLS{
-                if self.board_[row][col] == Piece::Empty{
-                    actions_count += 1;
-                    if rand::rng().random_range(0..actions_count) == 0{
-                        action = Some(PenteState::coord_2_action(row,col));
-                    }
-                }
-            }
-        }
-        return action;
-    }
-    
-    pub fn apply_action(&mut self, action: &usize){
-        trace!("Applying action {}", action);
-        let (row,col) = PenteState::action_2_coord(action);
-        if self.is_black_{
-            self.board_[row][col] = Piece::Black;
-        }else{
-            self.board_[row][col] = Piece::White;
-        }
-        self.num_pieces_ += 1;
-        self.update_captures(row, col);
-        if self.b_caps_ == 5 || self.w_caps_ == 5 || self.is_con5(row,col){
-            self.is_terminal_ = self.get_active_piece()
-        }else if self.num_pieces_ == ROWS*COLS{
-            self.is_terminal_ = Piece::Sentinel;
-        }
-        self.is_black_ = !self.is_black_;
-    }
-    
-    pub fn is_terminal(&self) -> bool{
-        return self.is_terminal_ != Piece::Empty;
-    }
-    
-    pub fn get_terminal_value(&self, ) -> i32{
-        if self.is_terminal_ == Piece::Black{
-            return 1;
-        }else if self.is_terminal_ == Piece::White{
-            return -1;
-        }
-        return 0;
-    }
-
+fn action_2_coord(action: usize) -> (usize, usize){
+    let row = action/COLS;
+    let col = action - row*COLS;
+    (row, col)
 }
+
 
 
 impl fmt::Display for PenteState {
