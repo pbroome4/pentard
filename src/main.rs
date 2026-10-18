@@ -51,9 +51,18 @@ fn train_tard(){
         iteration_n += 1;
         info!("Iteration {}", iteration_n);
         let _gaurd = tch::no_grad(||{
-            let training_data = engine::run_self_play(&tard, 1, 800);
+            let training_data = run_self_play(&tard, 1, 800);
             // dataset.append(training_data) # Is thread_safe
         });
         break;
     }
+}
+
+
+pub fn run_self_play(t: &tard::Tard, batch_size:u32, n:u32) -> Vec<tard::TrainingElement>{
+    debug!("Running self play");
+    let mut p = pente::PenteState::new();
+    
+    let mut v = Vec::<tard::TrainingElement>::new();
+    return v;
 }
