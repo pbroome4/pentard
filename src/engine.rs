@@ -1,10 +1,11 @@
 use tch::{Kind, Tensor};
 use rand::prelude::*;
 use tracing::{trace, debug, info};
-use std::fmt;
+use std::{fmt, intrinsics::sqrtf32, string::ParseError};
 
 use crate::tard;
 
+type Action = usize;
 pub trait GameState: Clone{
     fn new() -> Self;
 
@@ -21,11 +22,11 @@ pub trait GameState: Clone{
     // Generate a random legal action (sampled uniformly)
     // Must only be called in non-terminal state.
     // Calling in terminal state is UB.
-    fn get_random_action(&self) -> usize;
+    fn get_random_action(&self) -> Action;
 
     // Apply an action. action MUST be a legal action.
     // Calling with an illegal action is UB.
-    fn apply_action(&mut self, action: usize);
+    fn apply_action(&mut self, action: Action);
 
     // Is the game over
     fn is_terminal(&self) -> bool;
@@ -71,25 +72,32 @@ pub fn mcts(state: &impl GameState, t: &tard::Tard, num_sims: u32) -> (){
     debug!("{}", root);
 }
 
-// Use predictor upper confidence bounds applied to trees (PUCT)
-// to drill down to a leaf node. 
+// Performs a single MCTS simulation using PUCT
 fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard) -> Option<()>{
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
     loop{ // Drill down to a leaf node.
         if let Some(node) = tree.get(node_id){
-            if !node.is_expanded() && !state.is_terminal(){
-                tree.expand(node_id, &state, t);
+            if node.is_expanded(){
+                let (child_id, action) = tree.puct_select(node_id);
+                node_id = child_id;
+                state.apply_action(action);
+            }else{
+                break;
             }
         }
     }
-    //        if node.visits_>= 1 && !node.is_expanded_{
-    //            debug!("Expanding {}", node);
-    //            tree.expand(node_id, state.legal_actions());
-    //            let node = tree.get(node_id)?;
-    //            debug!("Expanded {}", node);
-    //        }
-    //    }
+    // Is leaf node (possibly terminal)
+    let node = tree.get(node_id).unwrap();
+    let reward = 
+        if state.is_terminal(){
+            state.get_terminal_value() as f32
+        }else{
+            tree.expand(node_id, &state, t)
+        };
+    
+    
+    
     //    let node = tree.get(node_id)?;
     //    if !node.is_expanded_{ break;}
     //    let Some(next_node_id) = tree.pick_ucb(node_id) else {break;};
@@ -115,7 +123,7 @@ pub struct MctsNode {
     pub first_child: Option<NodeId>,  // First element in the children linked list.
                                        // None if node is terminal or not yet expanded.
     pub next_sibling: Option<NodeId>, // Next sibling index.
-    pub action: Option<usize>,            // The action that led to this state
+    pub action: Option<Action>,            // The action that led to this state
     pub prior: f32,                  // The prior probability of selecting this node from the parent.                 
     pub visits: u32,                  // Number of times this node has been visited. Is 1 + sum(child_visits)
     pub value: f32,                   // Total value for this node.
@@ -175,19 +183,61 @@ impl MctsTree{
         return self.nodes_.get_mut(node_id);
     }
 
+    // Returns probabilistic upper confidence bound applied to trees (PUCT)
+    // and returns best option.
+    // Only call on node_id that have been expanded.
+    // Calling on node_id that are not expanded is UB.
+    fn puct_select(&self, node_id:NodeId) -> (NodeId, Action){
+        let curr = self.get(node_id).unwrap();
+        let mut child_id = curr.first_child.unwrap();
+        let mut best_child_id = child_id;
+        let mut best_score = self.calc_puct(child_id);
+        loop{
+            if let Some(child) = self.get(child_id){
+                if let Some(next_child_id) = child.next_sibling{
+                    child_id = next_child_id;
+                    score = self.calc_puct(child_id);
+                    if score > best_score{
+                        best_child_id = child_id;
+                        best_score = score;
+                    }
+                    continue;
+                } 
+            }
+            break;
+        }
+        let action = self.get(best_child_id).unwrap().action.unwrap();
+        return (best_child_id, action);
+    }
+
+    // Calculates PUCT score for a given node.
+    // Node must have a parent. 
+    fn calc_puct(&self, node_id: NodeId) -> f32{
+        let c = 1.5;    // c hyperparameter. Typically 1.0 to 2.5. More complex models will adjust this over time.
+        let node = self.get(node_id).unwrap();
+        let parent = self.get(node.parent.unwrap()).unwrap();
+        let exploitation_term =
+            if node.visits == 0{
+                0.0
+            }else{
+                node.value / (node.visits as f32)
+            };
+        let exploration_term = c * node.prior * sqrtf32(parent.visits as f32) / ((1 + node.visits) as f32);
+        return exploitation_term + exploitation_term;
+    }
+    
+
     // Only call on non-terminal states. Caling on terminal state is UB.
-    // 
-    pub fn expand(&mut self, node_id:NodeId, state: &impl GameState, t: &tard::Tard){
+    // Returns the value of the node
+    fn expand(&mut self, node_id:NodeId, state: &impl GameState, t: &tard::Tard) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
         debug!("Expanding node {}", node_id);
         let state_tens = state.to_tensor();
-        let in_tens = Tensor::stack(&[state_tens], 0);
+        let in_tens = Tensor::stack(&[state_tens], 0);  // Make a batchsize of 1
         let (p_batch, v_batch) = t.forward_t(&in_tens, false);
         let p = p_batch.flatten(0, -1);
         let v = v_batch.flatten(0, -1);
-        self.get_mut(node_id)
-            .unwrap()
-            .value += f32::try_from(v)
+        let val = f32::try_from(v)
                           .expect("Unable to convert value tensor to scalar");
         let legal_p = legalize_policy_tensor(&p, state);                
         let legal_p_vec = Vec::<f32>::try_from(legal_p.exp())  // Convert from log probability to probability
@@ -195,10 +245,11 @@ impl MctsTree{
         for action in 0..legal_p_vec.len(){
             self.add_child(action, node_id, legal_p_vec[action]);
         }
+        return val;
     }
 
     // Create a new node in the arena-pool. Return it's id.
-    fn add_child(&mut self, action: usize, parent: NodeId, prior:f32) -> NodeId{
+    fn add_child(&mut self, action: Action, parent: NodeId, prior:f32) -> NodeId{
         let child_id: NodeId = self.nodes_.len();
         let child = MctsNode{
             action: Some(action),

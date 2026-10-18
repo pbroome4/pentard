@@ -1,3 +1,4 @@
+use tch::nn::init::NonLinearity::Tanh;
 use tch::nn::{self, BatchNormConfig, ConvConfig, LinearConfig, linear};
 use tch::{Tensor, Kind};
 use tracing::{trace, debug, info};
@@ -87,7 +88,8 @@ impl Tard{
                  .relu()
                  .flatten(1, -1)
                  .apply(&self.value_fc1)
-                 .apply(&self.value_fc2);
+                 .apply(&self.value_fc2)
+                 .tanh();
         return (p,v)
     }
 }
