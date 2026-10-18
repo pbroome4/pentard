@@ -1,8 +1,9 @@
-use tch::nn::{self, BatchNormConfig, LinearConfig, linear};
+use tch::nn::{self, BatchNormConfig, ConvConfig, LinearConfig, linear};
 use tch::Tensor;
-use tracing::info;
+use tracing::{trace, debug, info};
 use arraydeque::ArrayDeque;
 use rand::RngExt;
+use std::default;
 use std::ops::{Deref, DerefMut};
 
 
@@ -41,17 +42,18 @@ impl Tard{
 
         // Input is shape (batch_size, input_channels, board_width, board_height)
         let conv1 = nn::conv2d(vs / "conv1", in_chan, 64, 3, c);
-        let conv2 = nn::conv2d(vs / "conv2", in_chan, 64, 3, c);
-        let conv3 = nn::conv2d(vs / "conv3", in_chan, 64, 3, c);
+        let conv2 = nn::conv2d(vs / "conv2", 64, 64, 3, c);
+        let conv3 = nn::conv2d(vs / "conv3", 64, 64, 3, c);
         let bn1 = nn::batch_norm2d(vs / "bn1", 64, b);
         let bn2 = nn::batch_norm2d(vs / "bn2", 64, b);
         let bn3 = nn::batch_norm2d(vs / "bn3", 64, b);
         
-        let policy_conv = nn::conv2d(vs / "policy_conv", 64, 2, 1, c);
+
+        let policy_conv = nn::conv2d(vs / "policy_conv", 64, 2, 1, ConvConfig::default());
         let policy_bn = nn::batch_norm2d(vs / "policy_bn", 2, b);
         let policy_fc = nn::linear(vs / "policy_fc", 2*81, 81, l);
         
-        let value_conv = nn::conv2d(vs / "value_conv", 64, 1, 3, c);
+        let value_conv = nn::conv2d(vs / "value_conv", 64, 1, 1, ConvConfig::default());
         let value_bn = nn::batch_norm2d(vs / "value_bn", 1, b);
         let value_fc1 = nn::linear(vs / "value_fc1", 81, 64, l);
         let value_fc2 = nn::linear(vs / "value_fc2",64, 1, l);
@@ -63,6 +65,7 @@ impl Tard{
 
     //Basically impl nn::ModuleT except i want to return pair of Tensors
     pub fn forward_t(&self, xs: &Tensor, train: bool) -> (Tensor,Tensor){
+        trace!("forward_t() with xs = {}  train = {}", xs, train);
         let x  = xs.apply(&self.conv1)
                    .apply_t(&self.bn1, train)
                    .relu()
@@ -75,10 +78,12 @@ impl Tard{
         let p = x.apply(&self.policy_conv)
                  .apply_t(&self.policy_bn, train)
                  .relu()
-                 .apply_t(&self.policy_fc, train);
+                 .flatten(1, -1)
+                 .apply(&self.policy_fc);
         let v = x.apply(&self.value_conv)
                  .apply_t(&self.value_bn, train)
                  .relu()
+                 .flatten(1, -1)
                  .apply(&self.value_fc1)
                  .apply(&self.value_fc2);
         return (p,v)

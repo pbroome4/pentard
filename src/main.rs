@@ -44,9 +44,9 @@ fn train_tard(){
         _ => println!("Using device: {:?}", device),
     }
     let vs = nn::VarStore::new(device);
-    let tard = tard::Tard::new(&vs.root(), 3);
+    let tard = tard::Tard::new(&vs.root(), pente::N_TENSOR_CHANNELS as i64);
     let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
-    let mut trn_buf = tard::TrainingBuffer::<10000>::new();
+    let mut trn_buf = tard::TrainingBuffer::<1000>::new();
 
     let mut iter_n: u32 = 0;
     while true{
@@ -57,7 +57,6 @@ fn train_tard(){
             debug!("TrainingBuffer size: {}", trn_buf.len());
         });
         iter_n += 1;
-        break;
     }
 }
 

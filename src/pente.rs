@@ -8,6 +8,7 @@ use crate::engine::GameState;
 pub const ROWS:usize = 9;
 pub const COLS:usize = 9;
 pub const ACTN_SPC_SIZE:usize = ROWS*COLS;
+pub const N_TENSOR_CHANNELS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -37,8 +38,13 @@ impl GameState for PenteState{
         return PenteState::new();
     }
 
+    // Output (num_channel=4) x ROWS x COLS Tensor.
+    // channel 0 is occupancy mask of active player
+    // channel 1 is occupancy mask of inactive player
+    // channel 2 is captures of active player
+    // channel 3 is captures of inactive player
     fn to_tensor(&self) -> Tensor {
-        let mut a = [[[0.0; COLS]; ROWS]; 4];
+        let mut a = [[[0.0; COLS]; ROWS]; N_TENSOR_CHANNELS];
         let b_chan = if self.is_black() {0} else {1};
         let w_chan = if self.is_black() {1} else {0}; 
         for r in 0..ROWS{
@@ -53,7 +59,7 @@ impl GameState for PenteState{
             }
         }
         let flat_slice = unsafe {
-            std::slice::from_raw_parts(a.as_ptr() as *const f32, 4*ROWS*COLS)
+            std::slice::from_raw_parts(a.as_ptr() as *const f32, N_TENSOR_CHANNELS * ROWS * COLS)
         };
         let t = Tensor::from_slice(flat_slice).reshape(&[4 as i64, ROWS as i64, COLS as i64]);
         return t;
@@ -68,18 +74,16 @@ impl GameState for PenteState{
         for i in 0..self.action_space_size(){
             if self.is_legal_action(i){
                 v[i] = true;
-            }//else{
-             //   v[i] = false;
-            //}
+            }
         }
         let t = Tensor::from_slice(&v);
         return t;
     }
 
+    // Must only call in non-terminal state. 
+    // Calling in a terminal state is UB
+    // (here we opt to return usize::MAX so errors are visible quickly)
     fn get_random_action(&self) -> usize{
-        // Must only call in non-terminal state. 
-        // Calling in a terminal state is UB
-        // (here we opt to return usize::MAX so errors are visible quickly)
         let mut action = usize::MAX;
         let mut actions_count = 0;
         for row in 0..ROWS{
