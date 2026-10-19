@@ -98,6 +98,7 @@ impl GameState for PenteState{
     
     fn apply_action(&mut self, action: usize){
         trace!("Applying action {}", action);
+        debug_assert!(self.is_legal_action(action), "Illegal action {} for board \n{}", action, self);
         let (row,col) = action_2_coord(action);
         if self.is_black_{
             self.board_[row][col] = Piece::Black;
@@ -106,7 +107,7 @@ impl GameState for PenteState{
         }
         self.num_pieces_ += 1;
         self.update_captures(row, col);
-        if self.b_caps_ == 5 || self.w_caps_ == 5 || self.is_con5(row,col){
+        if self.b_caps_ >= 5 || self.w_caps_ >= 5 || self.is_con5(row,col){
             self.is_terminal_ = self.get_active_piece()
         }else if self.num_pieces_ == ROWS*COLS{
             self.is_terminal_ = Piece::Sentinel;
@@ -118,7 +119,17 @@ impl GameState for PenteState{
         return self.is_terminal_ != Piece::Empty;
     }
     
-    fn get_terminal_value(&self, ) -> i32{
+    
+    fn get_terminal_value(&self) -> i32 {
+        // If it is your turn in terminal state, its a draw or a loss.
+        if self.is_terminal_ == Piece::Sentinel{
+            return 0;
+        }
+        return -1; 
+    }
+
+
+    fn get_objective_terminal_value(&self) -> i32{
         if self.is_terminal_ == Piece::Black{
             return 1;
         }else if self.is_terminal_ == Piece::White{

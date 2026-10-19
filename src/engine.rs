@@ -6,7 +6,7 @@ use std::{fmt};
 use crate::tard::{self, TrainingElement};
 
 type Action = usize;
-pub trait GameState: Clone{
+pub trait GameState: Clone + fmt::Display{
     const ACTN_SPC_SIZE: usize;
     const N_TENSOR_CHANNELS: usize;
 
@@ -32,12 +32,19 @@ pub trait GameState: Clone{
     // Is the game over
     fn is_terminal(&self) -> bool;
 
-    // Get the terminal value.
+    // Returns:
+    //  +1 on current player win
+    //   0 on Draw
+    //  -1 on current player loss.
+    // Note: for games like pente/chess, current player will only ever draw/lose.
+    fn get_terminal_value(&self) -> i32;
+
     // Returns:
     //  +1 on Player 0 win
     //   0 on Draw
     //  -1 on Player 1 win
-    fn get_terminal_value(&self) -> i32;     
+    // TODO DEPRECATE
+    fn get_objective_terminal_value(&self) -> i32;     
 }
 
 // Plan was to run multiple games in parallel so we could batch gpu operations.
@@ -49,20 +56,24 @@ pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size: u32, num_sims: u
     let mut state = G::new();
     let mut move_n = 0;
     while !state.is_terminal(){
-        debug!("Move {}", move_n);
+        debug!("Analzying move {}", move_n);
         let mcts_posterior = mcts(&state, t, num_sims);
+        debug!("{}", mcts_posterior);
+        debug!("\n{}", state);
+        let action = i64::try_from(mcts_posterior.argmax(-1, false)).unwrap() as usize;
+        debug!("Playing action: {}", action);
         let te = TrainingElement{
             state: state.to_tensor(),
             mcts_posterior: mcts_posterior,
             outcome: 0.0,
         };
         te_vec.push(te);
-        state.apply_action(state.get_random_action());
+        state.apply_action(action);
         move_n += 1;
     }
     let outcome = state.get_terminal_value() as f32;
     let mut polarity: f32 = 1.0;
-    for te in te_vec.iter_mut(){
+    for te in te_vec.iter_mut().rev(){
         te.outcome = outcome * polarity;
         polarity *= -1.0;
     }
@@ -106,7 +117,7 @@ fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard){
     tree.back_propogate(node_id, value); 
 }
 
-
+// Returns log mcts posterior probability distributions
 fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Tensor{
     let node = tree.get(node_id).unwrap();
     let mut child_id = node.first_child.unwrap(); // state assumed non-terminal and sims >= 1
@@ -121,7 +132,12 @@ fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -
             break;
         }
     }
-    let t = Tensor::from_slice(&p).exp(); // convert to log probability
+     // normalize (because parent visits = 1+sum(children))
+     // and convert to logits
+    let mut t = Tensor::from_slice(&p);
+    let t_sum = t.sum(Kind::Float);
+    t = t / t_sum;
+    t = t.log();
     return t;
 }
 
@@ -134,12 +150,12 @@ pub struct MctsNode {
     pub first_child: Option<NodeId>,  // First element in the children linked list.
                                        // None if node is terminal or not yet expanded.
     pub next_sibling: Option<NodeId>, // Next sibling index.
-    pub action: Option<Action>,            // The action that led to this state
-    pub prior: f32,                  // The prior probability of selecting this node from the parent.                 
-    pub visits: u32,                  // Number of times this node has been visited. Is 1 + sum(child_visits)
+    pub action: Option<Action>,       // The action that led to this state
+    pub prior: f32,                   // The prior probability of selecting this node from the parent.                 
+    pub visits: u32,                  // Number of times this node has been visited. 1 + Sum(child_visits)
     pub value: f32,                   // Total value for this node.
-                                       // If not expanded, is 0.0.
-                                       // If expanded, equals value network ouput + sum(child_values).
+                                      // If not expanded, is 0.0.
+                                      // If expanded, value - sum(child_values).
     //pub is_terminal: bool,            // If this node is a terminal game state.            
 }
 
@@ -178,7 +194,7 @@ impl MctsTree{
             first_child: None,     
             next_sibling: None,
             action:  None,
-            prior: 0.0,
+            prior: 1.0,
             visits: 0,
             value: 0.0,
         };
@@ -194,12 +210,14 @@ impl MctsTree{
         return self.nodes_.get_mut(node_id);
     }
 
-
+    
     fn back_propogate(&mut self, node_id: NodeId, value: f32){
         let mut curr_id = node_id;
+        let mut polarity: f32 = 1.0;
         while let Some(curr) = self.get_mut(curr_id){
-            curr.value += value;
+            curr.value += value * polarity;
             curr.visits += 1;
+            polarity *= -1.0;
             if let Some(parent_id) = curr.parent{
                 curr_id = parent_id;
             }else{
@@ -248,7 +266,7 @@ impl MctsTree{
                 node.value / (node.visits as f32)
             };
         let exploration_term = c * node.prior * (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
-        return exploitation_term + exploitation_term;
+        return exploitation_term + exploration_term;
     }
     
 
@@ -268,7 +286,9 @@ impl MctsTree{
         let legal_p_vec = Vec::<f32>::try_from(legal_p.exp())  // Convert from log probability to probability
                                      .expect("Unable to convert policy Tensor to vector");
         for action in 0..legal_p_vec.len(){
-            self.add_child(action, node_id, legal_p_vec[action]);
+            if legal_p_vec[action] > 0.0{   // Only add legal actions.
+                self.add_child(action, node_id, legal_p_vec[action]);
+            }
         }
         return val;
     }
@@ -293,6 +313,7 @@ impl MctsTree{
 }
 
 // p is log probability
+// Output Tensor is log probability
 fn legalize_policy_tensor(p: &Tensor, state: &impl GameState) -> Tensor{
     let legal_mask = state.legal_actions_mask();
     let mut legalized = p + (legal_mask - 1) * 1e9;  // Makes log probabilities extremely negative so softmax results in probability 0.

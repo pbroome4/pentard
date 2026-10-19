@@ -32,7 +32,7 @@ pub struct Tard{
 }
 
 impl Tard{
-    pub fn new(vs: &nn::Path, in_chan: i64)->Self{
+    pub fn new(vs: &nn::Path, in_chan: i64, rows:i64, cols:i64)->Self{
         let c = nn::ConvConfig{
             stride: 1,
             padding: 1,
@@ -51,11 +51,11 @@ impl Tard{
         
         let policy_conv = nn::conv2d(vs / "policy_conv", 64, 2, 1, ConvConfig::default());
         let policy_bn = nn::batch_norm2d(vs / "policy_bn", 2, b);
-        let policy_fc = nn::linear(vs / "policy_fc", 2*81, 81, l);
+        let policy_fc = nn::linear(vs / "policy_fc", 2*rows*cols, rows*cols, l);
         
         let value_conv = nn::conv2d(vs / "value_conv", 64, 1, 1, ConvConfig::default());
         let value_bn = nn::batch_norm2d(vs / "value_bn", 1, b);
-        let value_fc1 = nn::linear(vs / "value_fc1", 81, 64, l);
+        let value_fc1 = nn::linear(vs / "value_fc1", rows*cols, 64, l);
         let value_fc2 = nn::linear(vs / "value_fc2",64, 1, l);
         return Self{conv1, conv2, conv3,
                     bn1, bn2, bn3,
@@ -122,12 +122,10 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor{
 
     // value network loss
     let mse_loss = (tard_value_batch - outcome_batch).square()
-                                                  .mean(Kind::Float);
-
+                                                     .mean(Kind::Float);
+        debug!("CrossEntropyLoss: {}   MseLoss: {}", cross_entropy_loss, mse_loss);
     return cross_entropy_loss + mse_loss;
 }
-
-
 
 pub struct TrainingElement{
     pub state: tch::Tensor,       

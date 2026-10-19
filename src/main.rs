@@ -45,27 +45,32 @@ fn train_tard(){
         _ => println!("Using device: {:?}", device),
     }
     let vs = nn::VarStore::new(device);
-    let tard = tard::Tard::new(&vs.root(), PenteState::N_TENSOR_CHANNELS as i64);
-    let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 1e-4).unwrap();
-    let mut trn_buf = tard::TrainingBuffer::<1000>::new();
+    let tard = tard::Tard::new(&vs.root(),
+                               PenteState::N_TENSOR_CHANNELS as i64,
+                               pente::ROWS as i64,
+                               pente::COLS as i64);
+    let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 3e-4).unwrap();
+    let mut trn_buf = tard::TrainingBuffer::<50000>::new();
 
     let mut iter_n: u32 = 0;
-    while true{
+    loop{
         info!("Iteration {}", iter_n);
+        info!("Commencing self play");
         let _gaurd = tch::no_grad(||{
-            let training_data = engine::run_self_play::<PenteState>(&tard, 1, 800);
+            let training_data = engine::run_self_play::<PenteState>(&tard, 1, 200);
             trn_buf.extend_front(training_data);
             debug!("TrainingBuffer size: {}", trn_buf.len());
         });
         
         info!("Commencing training");
-        let training_size = 40;
+        let training_size = 256;
         let trn_sample = trn_buf.sample(training_size);
         opt.zero_grad();
         let loss = tard::compute_loss(&tard, &trn_sample);
+        info!("Loss: {}", loss);
         loss.backward();
         opt.step();
-        
+
         iter_n += 1;
 
     }
