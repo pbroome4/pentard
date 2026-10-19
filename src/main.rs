@@ -57,7 +57,17 @@ fn train_tard(){
             trn_buf.extend_front(training_data);
             debug!("TrainingBuffer size: {}", trn_buf.len());
         });
+        
+        info!("Commencing training");
+        let training_size = 40;
+        let trn_sample = trn_buf.sample(training_size);
+        opt.zero_grad();
+        let loss = tard::compute_loss(&tard, &trn_sample);
+        loss.backward();
+        opt.step();
+        
         iter_n += 1;
+
     }
 }
 

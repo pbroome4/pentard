@@ -1,11 +1,11 @@
 use tch::nn::init::NonLinearity::Tanh;
-use tch::nn::{self, BatchNormConfig, ConvConfig, LinearConfig, linear};
+use tch::nn::{self, BatchNormConfig, ConvConfig, LinearConfig, };
 use tch::{Tensor, Kind};
 use tracing::{trace, debug, info};
 use arraydeque::ArrayDeque;
 use rand::RngExt;
 use std::default;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Mul};
 
 
 #[derive(Debug)]
@@ -33,7 +33,6 @@ pub struct Tard{
 
 impl Tard{
     pub fn new(vs: &nn::Path, in_chan: i64)->Self{
-        
         let c = nn::ConvConfig{
             stride: 1,
             padding: 1,
@@ -50,7 +49,6 @@ impl Tard{
         let bn2 = nn::batch_norm2d(vs / "bn2", 64, b);
         let bn3 = nn::batch_norm2d(vs / "bn3", 64, b);
         
-
         let policy_conv = nn::conv2d(vs / "policy_conv", 64, 2, 1, ConvConfig::default());
         let policy_bn = nn::batch_norm2d(vs / "policy_bn", 2, b);
         let policy_fc = nn::linear(vs / "policy_fc", 2*81, 81, l);
@@ -93,6 +91,43 @@ impl Tard{
         return (p,v)
     }
 }
+
+
+pub fn training_batch_2_tensor(v: &Vec<TrainingElement>)-> (Tensor, Tensor, Tensor){
+    let mut states = Vec::with_capacity(v.len());
+    let mut mcts_posteriors = Vec::with_capacity(v.len());
+    let mut outcomes = Vec::with_capacity(v.len());
+    for te in v.iter(){
+        states.push(te.state.copy());
+        mcts_posteriors.push(te.mcts_posterior.copy());
+        outcomes.push(Tensor::from(te.outcome));
+    }
+    let state_batch = Tensor::stack(&states, 0);
+    let mcts_posterior_batch = Tensor::stack(&mcts_posteriors, 0);
+    let outcome_batch = Tensor::stack(&outcomes,0);
+    return (state_batch, mcts_posterior_batch, outcome_batch);
+}
+
+pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor{
+    let (state_batch,
+         mcts_posterior_batch,
+         outcome_batch) = training_batch_2_tensor(v);
+    let (mut tard_policy_batch, mut tard_value_batch) = t.forward_t(&state_batch, true);
+    
+    // policy networkloss
+    let mcts_posterior_probs = &mcts_posterior_batch.exp();
+    let cross_entropy_terms = mcts_posterior_probs * tard_policy_batch;
+    let cross_entropy_loss = -cross_entropy_terms.sum_dim_intlist(&[1][..], false, Kind::Float)
+                                                .mean(Kind::Float);
+
+    // value network loss
+    let mse_loss = (tard_value_batch - outcome_batch).square()
+                                                  .mean(Kind::Float);
+
+    return cross_entropy_loss + mse_loss;
+}
+
+
 
 pub struct TrainingElement{
     pub state: tch::Tensor,       
@@ -147,3 +182,4 @@ impl <const CAP: usize> DerefMut for TrainingBuffer<CAP>{
         return &mut self.memory_;
     }
 }
+
