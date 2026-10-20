@@ -60,7 +60,7 @@ pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size: u32, num_sims: u
         let mcts_posterior = mcts(&state, t, num_sims);
         debug!("{}", mcts_posterior);
         debug!("\n{}", state);
-        let action = i64::try_from(mcts_posterior.argmax(-1, false)).unwrap() as usize;
+        let action = i64::try_from(mcts_posterior.multinomial(1, false)).unwrap() as usize;
         debug!("Playing action: {}", action);
         let te = TrainingElement{
             state: state.to_tensor(),

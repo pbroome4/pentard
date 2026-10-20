@@ -32,7 +32,7 @@ use engine::GameState;
 
 fn main(){
     tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
+        .with_max_level(Level::INFO) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
         .init();
     train_tard();
 }
@@ -52,27 +52,32 @@ fn train_tard(){
     let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 3e-4).unwrap();
     let mut trn_buf = tard::TrainingBuffer::<50000>::new();
 
-    let mut iter_n: u32 = 0;
+    let mut trn_iter_n: u32 = 0;
+    let mut self_play_iter_n: u32 = 0;
+    let training_size = 256;
     loop{
-        info!("Iteration {}", iter_n);
-        info!("Commencing self play");
-        let _gaurd = tch::no_grad(||{
-            let training_data = engine::run_self_play::<PenteState>(&tard, 1, 200);
-            trn_buf.extend_front(training_data);
-            debug!("TrainingBuffer size: {}", trn_buf.len());
-        });
-        
-        info!("Commencing training");
-        let training_size = 256;
-        let trn_sample = trn_buf.sample(training_size);
-        opt.zero_grad();
-        let loss = tard::compute_loss(&tard, &trn_sample);
-        info!("Loss: {}", loss);
-        loss.backward();
-        opt.step();
-
-        iter_n += 1;
-
+        let mut self_play_states_added = 0;
+        while self_play_states_added < 3*training_size{
+            let _gaurd = tch::no_grad(||{
+                info!("Commencing self-play iteration {}", self_play_iter_n);
+                let training_data = engine::run_self_play::<PenteState>(&tard, 1, 200);
+                info!("Added {} training elements to buffer", training_data.len());
+                self_play_states_added += training_data.len();
+                trn_buf.extend_front(training_data);
+                self_play_iter_n += 1;
+            });
+        }
+        debug!("Training buffer size {}", trn_buf.len());
+        for i in 0..3{
+            info!("Commencing training iteration {}", trn_iter_n);
+            let trn_sample = trn_buf.sample(training_size);
+            opt.zero_grad();
+            let loss = tard::compute_loss(&tard, &trn_sample);
+            info!("Loss: {}", loss);
+            loss.backward();
+            opt.step();
+            trn_iter_n += 1;
+        }
     }
 }
 

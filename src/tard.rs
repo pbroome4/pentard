@@ -100,11 +100,11 @@ pub fn training_batch_2_tensor(v: &Vec<TrainingElement>)-> (Tensor, Tensor, Tens
     for te in v.iter(){
         states.push(te.state.copy());
         mcts_posteriors.push(te.mcts_posterior.copy());
-        outcomes.push(Tensor::from(te.outcome));
+        outcomes.push(Tensor::from_slice(&[te.outcome]));
     }
     let state_batch = Tensor::stack(&states, 0);
     let mcts_posterior_batch = Tensor::stack(&mcts_posteriors, 0);
-    let outcome_batch = Tensor::stack(&outcomes,0);
+    let outcome_batch = Tensor::stack(&outcomes, 0);
     return (state_batch, mcts_posterior_batch, outcome_batch);
 }
 
@@ -115,16 +115,25 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor{
     let (mut tard_policy_batch, mut tard_value_batch) = t.forward_t(&state_batch, true);
     
     // policy networkloss
+    assert_eq!(tard_policy_batch.size(), mcts_posterior_batch.size(),
+              "Policy batch size {:?} expected equal to mcts posterior batch size {:?}",
+              tard_policy_batch.size(), mcts_posterior_batch.size());
+    
     let mcts_posterior_probs = &mcts_posterior_batch.exp();
     let cross_entropy_terms = mcts_posterior_probs * tard_policy_batch;
     let cross_entropy_loss = -cross_entropy_terms.sum_dim_intlist(&[1][..], false, Kind::Float)
                                                 .mean(Kind::Float);
 
     // value network loss
+    assert_eq!(tard_value_batch.size(), outcome_batch.size(),
+              "Value batch size {:?} expected equal to outcome batch size {:?}",
+              tard_value_batch.size(), outcome_batch.size());
     let mse_loss = (tard_value_batch - outcome_batch).square()
                                                      .mean(Kind::Float);
-        debug!("CrossEntropyLoss: {}   MseLoss: {}", cross_entropy_loss, mse_loss);
-    return cross_entropy_loss + mse_loss;
+    
+    info!("CrossEntropyLoss: {}   MseLoss: {}", cross_entropy_loss, mse_loss);
+    let loss = cross_entropy_loss + mse_loss;
+    return loss;
 }
 
 pub struct TrainingElement{
