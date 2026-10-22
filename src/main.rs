@@ -55,12 +55,13 @@ fn train_tard(){
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
     let training_size = 256;
+    let n_rollouts = 200;
     loop{
         let mut self_play_states_added = 0;
         while self_play_states_added < 3*training_size{
             let _gaurd = tch::no_grad(||{
                 info!("Commencing self-play iteration {}", self_play_iter_n);
-                let training_data = engine::run_self_play::<PenteState>(&tard, 1, 200);
+                let training_data = engine::run_self_play::<PenteState>(&tard, n_rollouts);
                 info!("Added {} training elements to buffer", training_data.len());
                 self_play_states_added += training_data.len();
                 trn_buf.extend_front(training_data);
@@ -68,7 +69,7 @@ fn train_tard(){
             });
         }
         debug!("Training buffer size {}", trn_buf.len());
-        for i in 0..3{
+        for i in 0..20{
             info!("Commencing training iteration {}", trn_iter_n);
             let trn_sample = trn_buf.sample(training_size);
             opt.zero_grad();

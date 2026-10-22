@@ -1,4 +1,4 @@
-
-export LIBTORCH_USE_PYTORCH=1
-export LD_LIBRARY_PATH=./.venv/lib/python3.12/site-packages/torch/lib/:$LD_LIBRARY_PATH
 export RUST_BACKTRACE=1
+export LIBTORCH=~/libtorch-shared-with-deps-2.11.0+cu130/libtorch/
+export LD_LIBRARY_PATH=/home/pbroome4/libtorch-shared-with-deps-2.11.0+cu130/libtorch/lib
+export TORCH_CUDA_VERSION=cu128

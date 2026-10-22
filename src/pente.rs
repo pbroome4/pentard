@@ -1,7 +1,7 @@
 use std::{fmt};
 use tracing::{trace, debug, info};
 use rand::prelude::*;
-use tch::{Kind::{self, Float}, Tensor};
+use burn::{Tensor};
 
 use crate::engine::GameState;
 
@@ -31,7 +31,7 @@ pub struct PenteState{
                          // Sentinel is draw.
 }
 
-impl GameState for PenteState{
+impl GameState<3> for PenteState{
     const ACTN_SPC_SIZE: usize = ROWS*COLS;
     const N_TENSOR_CHANNELS: usize = 4;
 
@@ -44,36 +44,34 @@ impl GameState for PenteState{
     // channel 1 is occupancy mask of inactive player
     // channel 2 is captures of active player
     // channel 3 is captures of inactive player
-    fn to_tensor(&self) -> Tensor {
-        let mut a = [[[0.0; COLS]; ROWS]; Self::N_TENSOR_CHANNELS];
+    fn to_tensor(&self) -> Tensor<3> {
+        let mut a = [0.0; ROWS * COLS * Self::N_TENSOR_CHANNELS];
         let b_chan = if self.is_black() {0} else {1};
         let w_chan = if self.is_black() {1} else {0}; 
         for r in 0..ROWS{
             for c in 0..COLS{
                 if self.board_[r][c] == Piece::Black{
-                    a[b_chan][r][c] = 1.0;
+                    a[b_chan*COLS*ROWS + r*COLS + c] = 1.0;
                 }else if self.board_[r][c] == Piece::White{
-                    a[w_chan][r][c] = 1.0;
+                    a[w_chan*COLS*ROWS + r*COLS + c] = 1.0;
                 }
-                a[b_chan+2][r][c] = self.b_caps_ as f32;
-                a[w_chan+2][r][c] = self.w_caps_ as f32;
+                a[(b_chan+2)*COLS*ROWS + r *COLS + c] = self.b_caps_ as f32;
+                a[(b_chan+2)*COLS*ROWS + r *COLS + c] = self.w_caps_ as f32;
             }
         }
-        let flat_slice = unsafe {
-            std::slice::from_raw_parts(a.as_ptr() as *const f32, Self::N_TENSOR_CHANNELS * ROWS * COLS)
-        };
-        let t = Tensor::from_slice(flat_slice).reshape(&[4 as i64, ROWS as i64, COLS as i64]);
+        let t = Tensor::<3>::from_floats(a, &Default::default())
+                       .reshape([4, ROWS, COLS]);
         return t;
     }
 
-    fn legal_actions_mask(&self) -> tch::Tensor {
-        let mut v = [0; Self::ACTN_SPC_SIZE];
+    fn legal_actions_mask(&self) -> Tensor<1> {
+        let mut v = [0.0; Self::ACTN_SPC_SIZE];
         for i in 0..Self::ACTN_SPC_SIZE{
             if self.is_legal_action(i){
-                v[i] = 1;
+                v[i] = 1.0;
             }
         }
-        let t = Tensor::from_slice(&v);
+        let t = Tensor::from_floats(v, &Default::default());
         return t;
     }
 

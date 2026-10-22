@@ -1,4 +1,5 @@
-use tch::{Kind, Tensor};
+use burn::{Tensor, tensor::TensorData};
+use burn::tensor::activation::{log_softmax};
 use rand::prelude::*;
 use tracing::{trace, debug, info};
 use std::{fmt};
@@ -6,16 +7,17 @@ use std::{fmt};
 use crate::tard::{self, TrainingElement};
 
 type Action = usize;
-pub trait GameState: Clone + fmt::Display{
+pub trait GameState<const D:usize>: Clone + fmt::Display{
     const ACTN_SPC_SIZE: usize;
     const N_TENSOR_CHANNELS: usize;
+    
 
     fn new() -> Self;
 
-    fn to_tensor(&self) -> Tensor;
+    fn to_tensor(&self) -> Tensor<D>;
 
     // usize tensor of 0's and 1's. 0=illegal. 1=legal
-    fn legal_actions_mask(&self) -> Tensor;
+    fn legal_actions_mask(&self) -> Tensor<1>;
 
     // Get vector of legal actions 
     //fn legal_actions(&self) -> Vec<usize>;
@@ -47,10 +49,8 @@ pub trait GameState: Clone + fmt::Display{
     fn get_objective_terminal_value(&self) -> i32;     
 }
 
-// Plan was to run multiple games in parallel so we could batch gpu operations.
-// Think it is still possible to batch gpu operations even simulating games one at a time, so might remove batch_size
-// For no batch_size is assumed equal to 1.
-pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size: u32, num_sims: u32) -> Vec<tard::TrainingElement>{
+
+pub fn run_self_play <const D:usize, G: GameState<D>>(t: &tard::Tard, num_sims: u32) -> Vec<tard::TrainingElement>{
     debug!("Running self play");
     let mut te_vec = Vec::<tard::TrainingElement>::new();
     let mut state = G::new();
@@ -60,9 +60,7 @@ pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size: u32, num_sims: u
         let mcts_posterior = mcts(&state, t, num_sims);
         debug!("{}", mcts_posterior);
         debug!("\n{}", state);
-        let action = i64::try_from(mcts_posterior.exp()
-                                                 .multinomial(1, false))
-                                                 .unwrap() as Action;
+        let action = mcts_posterior.clone().argmax(-1).into_scalar::<u32>() as usize;
         debug!("Playing action: {}", action);
         let te = TrainingElement{
             state: state.to_tensor(),
@@ -83,7 +81,7 @@ pub fn run_self_play <G: GameState>(t: &tard::Tard, batch_size: u32, num_sims: u
     return te_vec;
 }
 // Run MCTS from the current state. State must be non-terminal. num sims >= 1
-pub fn mcts <GS: GameState> (state: &GS, t: &tard::Tard, num_sims: u32) -> Tensor{
+pub fn mcts <GS: GameState> (state: &GS, t: &tard::Tard, num_sims: u32) -> Tensor<1>{
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new();
     for i in 0..num_sims{
@@ -121,7 +119,7 @@ fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard){
 }
 
 // Returns log mcts posterior probability distributions
-fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Tensor{
+fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Tensor<1>{
     let node = tree.get(node_id).unwrap();
     let mut child_id = node.first_child.unwrap(); // state assumed non-terminal and sims >= 1
     let mut p = vec![0.0; actn_spc_size];
@@ -137,8 +135,9 @@ fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -
     }
      // normalize (because parent visits = 1+sum(children))
      // and convert to logits
-    let mut t = Tensor::from_slice(&p);
-    let t_sum = t.sum(Kind::Float);
+    let tens_data  = TensorData::new(p, [actn_spc_size]);
+    let mut t = Tensor::from_floats(tens_data, &Default::default());
+    let t_sum = t.clone().sum();
     t = t / t_sum;
     t = t.log();
     return t;
@@ -279,15 +278,13 @@ impl MctsTree{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);
         let state_tens = state.to_tensor();
-        let in_tens = Tensor::stack(&[state_tens], 0);  // Make a batchsize of 1
-        let (p_batch, v_batch) = t.forward_t(&in_tens, false);
+        let in_tens = Tensor::stack(vec![state_tens], 0);  // Make a batchsize of 1
+        let (p_batch, v_batch) = t.forward(in_tens);
         let p = p_batch.flatten(0, -1);
-        let v = v_batch.flatten(0, -1);
-        let val = f32::try_from(v)
-                          .expect("Unable to convert value tensor to scalar");
-        let legal_p = legalize_policy_tensor(&p, state);                
-        let legal_p_vec = Vec::<f32>::try_from(legal_p.exp())  // Convert from log probability to probability
-                                     .expect("Unable to convert policy Tensor to vector");
+        let v = v_batch.flatten::<1>(0, -1);
+        let val = v.into_scalar::<f32>();
+        let legal_p = legalize_policy_tensor(&p, state);  
+        let legal_p_vec = legal_p.exp().into_data().try_to_vec().unwrap();              
         for action in 0..legal_p_vec.len(){
             if legal_p_vec[action] > 0.0{   // Only add legal actions.
                 self.add_child(action, node_id, legal_p_vec[action]);
@@ -317,9 +314,9 @@ impl MctsTree{
 
 // p is log probability
 // Output Tensor is log probability
-fn legalize_policy_tensor(p: &Tensor, state: &impl GameState) -> Tensor{
+fn legalize_policy_tensor(p: &Tensor<1>, state: &impl GameState) -> Tensor<1>{
     let legal_mask = state.legal_actions_mask();
-    let mut legalized = p + (legal_mask - 1) * 1e9;  // Makes log probabilities extremely negative so softmax results in probability 0.
-    legalized = legalized.log_softmax(-1, Kind::Float);
+    let mut legalized = p.clone() + (legal_mask - 1) * 1e9;  // Makes log probabilities extremely negative so softmax results in probability 0.
+    legalized = log_softmax(p.clone(), -1);
     return legalized;
 }
