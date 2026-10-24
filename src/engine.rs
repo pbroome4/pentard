@@ -1,6 +1,6 @@
-use burn::tensor::{Tensor, Device, TensorData};
+use burn::module::Module;
+use burn::tensor::{Tensor, TensorData};
 use burn::tensor::activation::{log_softmax};
-use rand::prelude::*;
 use tracing::{trace, debug, info};
 use std::{fmt};
 
@@ -8,12 +8,11 @@ use crate::tard::{self, TrainingElement};
 
 type Action = usize;
 
-// Burn specific GameState Trait
+
 // GameState is an abstraction of a 2D board game.
-// State can be encoded into a rank 3 tensor [chan][row][col]
 pub trait GameState: Clone + fmt::Display{
-    const ACTN_SPC_SIZE: usize; // action space is [0, ACTN_SPC_SIZE).
-    const N_CHAN: usize;
+    const ACTN_SPC_SIZE: usize; // Input action space is scalar [0, ACTN_SPC_SIZE).
+    const N_CHAN: usize; // Game can be represented as tensor<3> [[[f32; COLS]; ROWS]; N_CHAN]
     const ROWS: usize;
     const COLS: usize;
 
@@ -27,7 +26,7 @@ pub trait GameState: Clone + fmt::Display{
     // Generate a random legal action (sampled uniformly)
     // Must only be called in non-terminal state.
     // Calling in terminal state is UB.
-    fn get_random_action(&self) -> Action;
+    //fn get_random_action(&self) -> Action;
 
     // Apply an action. action MUST be a legal action.
     // Calling with an illegal action is UB.
@@ -53,23 +52,29 @@ pub trait GameState: Clone + fmt::Display{
 pub fn run_self_play <G: GameState>(
     t: &tard::Tard,
     num_sims: u32,
-    device: &Device
 ) -> Vec<tard::TrainingElement>{
     debug!("Running self play");
+    let device = t.devices()
+                  .into_iter()
+                  .next()
+                  .expect("Expected at least one device");
     let mut te_vec = Vec::new();
     let mut state = G::new();
     let mut move_n = 0;
     while !state.is_terminal(){
-        debug!("Analzying move {}", move_n);
-        let mcts_posterior = mcts(&state, t, num_sims);
-        debug!("{}", mcts_posterior);
-        debug!("\n{}", state);
-        let action = mcts_posterior.clone().exp().categorical(1).into_scalar::<u32>() as usize;
+        debug!("Current State: \n{}", state);
+        debug!("Computing self-play move#: {}", move_n);
+        let (mcts_pri, mcts_post) = mcts(&state, t, num_sims);
+        debug!("MCTS prior logits: {:?}", mcts_pri);
+        debug!("MCTS posterior logits:{:?}", mcts_post);
+        let mcts_tens_d = TensorData::new(mcts_post, [G::ACTN_SPC_SIZE]);
+        let mcts_tens = Tensor::from_floats(mcts_tens_d, &device);
+        let action = mcts_tens.clone().exp().categorical(1).into_scalar::<u32>() as usize;
         debug!("Playing action: {}", action);
         let te = TrainingElement{
             state: state.to_tensor(),
-            mcts_posterior: mcts_posterior,
-            outcome: Tensor::from_floats([0.0_f32], device)
+            mcts_posterior: mcts_tens,
+            outcome: Tensor::from_floats([0.0_f32], &device)
         };
         te_vec.push(te);
         state.apply_action(action);
@@ -79,7 +84,7 @@ pub fn run_self_play <G: GameState>(
      // Last element in te_vec is one state before terminal, so we start inverted.
     let mut polarity: f32 = -1.0; 
     for te in te_vec.iter_mut().rev(){
-        te.outcome = Tensor::from_floats([outcome * polarity], device);
+        te.outcome = Tensor::from_floats([outcome * polarity], &device);
         polarity *= -1.0;
     }
     return te_vec;
@@ -88,15 +93,17 @@ pub fn run_self_play <G: GameState>(
 
 // Run MCTS from the current state. State must be non-terminal. num sims >= 1.
 // Returns log probabiltiy posterior.
-pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> Tensor<1>{
+pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f32>, Vec<f32>){
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new();
     for _ in 0..num_sims{
         mcts_sim(&mut tree, state, t);
     }
     let root = tree.get(0).unwrap();
-    debug!("Root node: {}", root);
-    return mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
+    debug!("Mcts root node: {}", root);
+    let mcts_pri = mcts_tree_prior(&tree, 0, G::ACTN_SPC_SIZE);
+    let mcts_post = mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
+    return (mcts_pri, mcts_post);
 }
 
 // Performs a single MCTS simulation using PUCT
@@ -108,14 +115,13 @@ fn mcts_sim(
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
     loop{ // Drill down to a leaf node.
-        if let Some(node) = tree.get(node_id){
-            if node.is_expanded(){
-                let (child_id, action) = tree.puct_select(node_id);
-                node_id = child_id;
-                state.apply_action(action);
-            }else{
-                break;
-            }
+        let node = tree.get(node_id).unwrap();
+        if node.is_expanded(){
+            let (child_id, action) = tree.puct_select(node_id);
+            node_id = child_id;
+            state.apply_action(action);
+        }else{
+            break;
         }
     }
     // Is leaf node (possibly terminal)
@@ -128,31 +134,34 @@ fn mcts_sim(
     tree.back_propogate(node_id, value); 
 }
 
+
 // Returns log mcts posterior probability distributions
-fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Tensor<1>{
+// node_id must be a non-terminal and non-leaf node.
+fn mcts_tree_posterior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Vec<f32>{
     let node = tree.get(node_id).unwrap();
-    let mut child_id = node.first_child.unwrap(); // state assumed non-terminal and sims >= 1
     let mut p = vec![0.0; actn_spc_size];
-    loop{
+    for child_id in tree.children(node_id){
         let child = tree.get(child_id).unwrap();
         let action = child.action.unwrap();
         p[action] = (child.visits as f32) / (node.visits as f32);
-        if let Some(next_child_id) = child.next_sibling{
-            child_id = next_child_id;
-        }else{
-            break;
-        }
     }
-     // normalize (because parent visits = 1+sum(children))
-     // and convert to logits
-    let tens_data  = TensorData::new(p, [actn_spc_size]);
-    let mut t = Tensor::from_floats(tens_data, &Default::default());
-    let t_sum = t.clone().sum();
-    t = t / t_sum;
-    t = t.log();
-    return t;
+    let p_sum: f32 = p.iter().sum();
+    for e in p.iter_mut(){
+        *e = (*e / p_sum).ln();
+    }
+    return p;
 }
 
+// Returns log probability
+fn mcts_tree_prior(tree: &MctsTree, node_id: NodeId, actn_spc_size: usize) -> Vec<f32>{
+    let mut p = vec![f32::NEG_INFINITY; actn_spc_size];
+    for child_id in tree.children(node_id){
+        let child = tree.get(child_id).unwrap();
+        let action = child.action.unwrap();
+        p[action] = child.prior.ln();
+    }
+    return p;
+}
 
 
 type NodeId = usize;
@@ -177,6 +186,8 @@ impl MctsNode{
     }
 }
 
+
+
 impl fmt::Display for MctsNode{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut avg_val = 0.0;
@@ -188,12 +199,25 @@ impl fmt::Display for MctsNode{
     }
 }
 
+pub struct Children<'a>{
+    tree: &'a MctsTree,
+    next_id: Option<NodeId>
+}
+
+impl <'a>Iterator for Children<'a>{
+    type Item = NodeId;
+    fn next(&mut self) -> Option<Self::Item> {
+        let current_id = self.next_id?;
+        self.next_id = self.tree.get(current_id)?.next_sibling;
+        return Some(current_id);
+    }
+}
 
 
 // Memory-pool implementation of MCTS Tree
 // Root node has NodeId == 0;
 pub struct MctsTree {
-    pub nodes_: Vec<MctsNode>,
+    nodes_: Vec<MctsNode>,
 }
 
 impl MctsTree{
@@ -222,6 +246,11 @@ impl MctsTree{
         return self.nodes_.get_mut(node_id);
     }
 
+
+    fn children(&self, node_id: NodeId) -> Children<'_>{
+        let first_child = self.get(node_id).unwrap().first_child;
+        return Children { tree: &self, next_id: first_child }
+    }
     
     fn back_propogate(&mut self, node_id: NodeId, value: f32){
         let mut curr_id = node_id;
@@ -243,23 +272,14 @@ impl MctsTree{
     // Only call on node_id that have been expanded.
     // Calling on node_id that are not expanded is UB.
     fn puct_select(&self, node_id:NodeId) -> (NodeId, Action){
-        let curr = self.get(node_id).unwrap();
-        let mut child_id = curr.first_child.unwrap();
-        let mut best_child_id = child_id;
-        let mut best_score = self.calc_puct(child_id);
-        loop{
-            if let Some(child) = self.get(child_id){
-                if let Some(next_child_id) = child.next_sibling{
-                    child_id = next_child_id;
-                    let score = self.calc_puct(child_id);
-                    if score > best_score{
-                        best_child_id = child_id;
-                        best_score = score;
-                    }
-                    continue;
-                } 
+        let mut best_child_id = usize::MAX;
+        let mut best_score = f32::MIN;
+        for child_id in self.children(node_id){
+            let score = self.calc_puct(child_id);
+            if score > best_score{
+                best_child_id = child_id;
+                best_score = score;
             }
-            break;
         }
         let action = self.get(best_child_id).unwrap().action.unwrap();
         return (best_child_id, action);

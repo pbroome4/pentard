@@ -53,7 +53,7 @@ fn train_tard(){
         let mut self_play_states_added = 0;
         while self_play_states_added < 3*training_size{
             info!("Commencing self-play iteration {}", self_play_iter_n);
-            let training_data = engine::run_self_play::<PenteState>(&tard, n_rollouts, &device);
+            let training_data = engine::run_self_play::<PenteState>(&tard, n_rollouts);
             info!("Added {} training elements to buffer", training_data.len());
             self_play_states_added += training_data.len();
             trn_buf.extend_front(training_data);

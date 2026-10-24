@@ -149,7 +149,6 @@ impl TrainingBatch{
 }
 
 
-
 pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor<1>{
     let batch = TrainingBatch::from_training_elements(v);
     let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
