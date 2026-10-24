@@ -5,8 +5,6 @@ use burn::{Tensor};
 
 use crate::engine::GameState;
 
-pub const ROWS:usize = 9;
-pub const COLS:usize = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -19,7 +17,7 @@ pub enum Piece{
 
 #[derive(Clone)]
 pub struct PenteState{
-    board_: [[Piece; COLS]; ROWS],
+    board_: [[Piece; PenteState::COLS]; PenteState::ROWS],
     b_caps_: u8, 
     w_caps_: u8,
     is_black_: bool,
@@ -31,10 +29,12 @@ pub struct PenteState{
                          // Sentinel is draw.
 }
 
-impl GameState<3> for PenteState{
-    const ACTN_SPC_SIZE: usize = ROWS*COLS;
-    const N_TENSOR_CHANNELS: usize = 4;
-
+impl GameState for PenteState{
+    const ACTN_SPC_SIZE: usize = PenteState::ROWS * PenteState::COLS;
+    const N_CHAN:usize = 4;
+    const ROWS:usize = 9;
+    const COLS:usize = 9;
+    
     fn new() -> Self{
         return PenteState::new();
     }
@@ -45,22 +45,22 @@ impl GameState<3> for PenteState{
     // channel 2 is captures of active player
     // channel 3 is captures of inactive player
     fn to_tensor(&self) -> Tensor<3> {
-        let mut a = [0.0; ROWS * COLS * Self::N_TENSOR_CHANNELS];
+        let mut a = [[[0.0; PenteState::COLS]; PenteState::ROWS]; PenteState::N_CHAN];
         let b_chan = if self.is_black() {0} else {1};
         let w_chan = if self.is_black() {1} else {0}; 
-        for r in 0..ROWS{
-            for c in 0..COLS{
+        for r in 0..PenteState::ROWS{
+            for c in 0..PenteState::COLS{
                 if self.board_[r][c] == Piece::Black{
-                    a[b_chan*COLS*ROWS + r*COLS + c] = 1.0;
+                    a[b_chan][r][c] = 1.0;
                 }else if self.board_[r][c] == Piece::White{
-                    a[w_chan*COLS*ROWS + r*COLS + c] = 1.0;
+                    a[w_chan][r][c] = 1.0;
                 }
-                a[(b_chan+2)*COLS*ROWS + r *COLS + c] = self.b_caps_ as f32;
-                a[(b_chan+2)*COLS*ROWS + r *COLS + c] = self.w_caps_ as f32;
+                a[b_chan+2][r][c] = self.b_caps_ as f32;
+                a[w_chan+2][r][c] = self.w_caps_ as f32;
             }
         }
         let t = Tensor::<3>::from_floats(a, &Default::default())
-                       .reshape([4, ROWS, COLS]);
+                       .reshape([4, PenteState::ROWS, PenteState::COLS]);
         return t;
     }
 
@@ -81,8 +81,8 @@ impl GameState<3> for PenteState{
     fn get_random_action(&self) -> usize{
         let mut action = usize::MAX;
         let mut actions_count = 0;
-        for row in 0..ROWS{
-            for col in 0..COLS{
+        for row in 0..PenteState::ROWS{
+            for col in 0..PenteState::COLS{
                 if self.board_[row][col] == Piece::Empty{
                     actions_count += 1;
                     if rand::rng().random_range(0..actions_count) == 0{
@@ -107,7 +107,7 @@ impl GameState<3> for PenteState{
         self.update_captures(row, col);
         if self.b_caps_ >= 5 || self.w_caps_ >= 5 || self.is_con5(row,col){
             self.is_terminal_ = self.get_active_piece()
-        }else if self.num_pieces_ == ROWS*COLS{
+        }else if self.num_pieces_ == PenteState::ROWS * PenteState::COLS{
             self.is_terminal_ = Piece::Sentinel;
         }
         self.is_black_ = !self.is_black_;
@@ -144,7 +144,7 @@ impl PenteState{
     pub fn new() -> Self{
         trace!("Pente new()");
         Self{
-            board_: [[Piece::Empty; COLS]; ROWS],
+            board_: [[Piece::Empty; PenteState::COLS]; PenteState::ROWS],
             b_caps_:  0,
             w_caps_:  0,
             is_black_: true,
@@ -165,13 +165,13 @@ impl PenteState{
 
     pub fn is_legal_action(&self, action: usize) -> bool{
         let (row, col) = action_2_coord(action);
-        return row < ROWS && col < COLS && self.board_[row][col] == Piece::Empty;
+        return row < PenteState::ROWS && col < PenteState::COLS && self.board_[row][col] == Piece::Empty;
     }
     
     fn legal_actions(&self) -> Vec<usize>{
-        let mut v = Vec::with_capacity(ROWS*COLS);
-        for row in 0..ROWS{
-            for col in 0..COLS{
+        let mut v = Vec::with_capacity(PenteState::ROWS * PenteState::COLS);
+        for row in 0..PenteState::ROWS{
+            for col in 0..PenteState::COLS{
                 if self.board_[row][col] == Piece::Empty{
                     v.push(coord_2_action(row,col));
                 }
@@ -223,7 +223,7 @@ impl PenteState{
     // Safe method to grab piece occupying space. 
     // If space is out of bounds it returns None.
     fn get_square(&self, row: i32, col: i32) -> Option<Piece>{
-        if row < 0 || row >= (ROWS as i32) || col < 0 || col >= (COLS as i32) {
+        if row < 0 || row >= (PenteState::ROWS as i32) || col < 0 || col >= (PenteState::COLS as i32) {
             return None
         }
         let r = row as usize;
@@ -278,12 +278,12 @@ impl PenteState{
 }
 
 fn coord_2_action(row: usize, col:usize) -> usize{
-        row*COLS + col
+        row * PenteState::COLS + col
     }
 
 fn action_2_coord(action: usize) -> (usize, usize){
-    let row = action/COLS;
-    let col = action - row*COLS;
+    let row = action / PenteState::COLS;
+    let col = action - row * PenteState::COLS;
     (row, col)
 }
 
@@ -292,13 +292,13 @@ fn action_2_coord(action: usize) -> (usize, usize){
 impl fmt::Display for PenteState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "   ")?;
-        for col in 0..COLS{
+        for col in 0..PenteState::COLS{
             write!(f, "{:02} ", col)?;
         }
         write!(f,"\n")?;
-        for row in 0..ROWS{
+        for row in 0..PenteState::ROWS{
             write!(f, "{:02}  ", row)?;
-            for col in 0..COLS{
+            for col in 0..PenteState::COLS{
                 if self.board_[row][col] == Piece::Empty{
                     write!(f, "·  ")?;
                 }else if self.board_[row][col]  == Piece::Black{

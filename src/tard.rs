@@ -34,6 +34,7 @@ pub struct Tard{
 }
 impl Tard {
     pub fn new(in_chan: usize, rows: usize, cols: usize, device: &Device) -> Self {
+        info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
         let conv1 = Conv2dConfig::new([in_chan, 64], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
@@ -57,21 +58,22 @@ impl Tard {
         let value_fc1 = LinearConfig::new(rows * cols, 64).init(device);
         let value_fc2 = LinearConfig::new(64, 1).init(device);
 
-        Self {
-            conv1,
-            conv2,
-            conv3,
-            bn1,
-            bn2,
-            bn3,
-            policy_conv,
-            policy_bn,
-            policy_fc,
-            value_conv,
-            value_bn,
-            value_fc1,
-            value_fc2,
-        }
+        let s = Self {
+                conv1,
+                conv2,
+                conv3,
+                bn1,
+                bn2,
+                bn3,
+                policy_conv,
+                policy_bn,
+                policy_fc,
+                value_conv,
+                value_bn,
+                value_fc1,
+                value_fc2,
+        };
+        return s;
     }
 
     pub fn forward(&self, x: Tensor<4>) -> (Tensor<2>, Tensor<2>) {
@@ -113,44 +115,54 @@ impl Tard {
 
 ////// Training structures and Batch Utilities ////
 #[derive(Clone)]
-pub struct TrainingElement<const D:usize>{
-    pub state: Tensor<D>,       
+pub struct TrainingElement{
+    pub state: Tensor<3>,       
     pub mcts_posterior: Tensor<1>,
-    pub outcome: f32,
+    pub outcome: Tensor<1>,
 }
 
+pub struct TrainingBatch{
+    pub state: Tensor<4>,
+    pub mcts_posterior:Tensor<2>,
+    pub outcome: Tensor<2>
+}
 
-
-pub fn training_batch_2_tensor<const D:usize>(v: &Vec<TrainingElement<D>>)-> (Tensor<4>, Tensor<2>, Tensor<1>){
-    let mut states = Vec::with_capacity(v.len());
-    let mut mcts_posteriors = Vec::with_capacity(v.len());
-    let mut outcomes = Vec::with_capacity(v.len());
-    for te in v.iter(){
-        states.push(te.state.clone());
-        mcts_posteriors.push(te.mcts_posterior.clone());
-        outcomes.push(Tensor::from_floats([te.outcome], &Default::default()));
+impl TrainingBatch{
+    pub fn from_training_elements(v: &Vec<TrainingElement>) -> TrainingBatch{
+        let mut states = Vec::with_capacity(v.len());
+        let mut mcts_posteriors = Vec::with_capacity(v.len());
+        let mut outcomes = Vec::with_capacity(v.len());
+        for te in v.iter(){
+            states.push(te.state.clone());
+            mcts_posteriors.push(te.mcts_posterior.clone());
+            outcomes.push(te.outcome.clone());
+        }
+        let state_batch = Tensor::stack(states, 0);
+        let mcts_posterior_batch = Tensor::stack(mcts_posteriors, 0);
+        let outcome_batch = Tensor::stack(outcomes, 0);
+        Self{
+            state:state_batch,
+            mcts_posterior:mcts_posterior_batch,
+            outcome:outcome_batch
+        }
     }
-    let state_batch = Tensor::stack(states, 0);
-    let mcts_posterior_batch = Tensor::stack(mcts_posteriors, 0);
-    let outcome_batch = Tensor::stack(outcomes, 0);
-    return (state_batch, mcts_posterior_batch, outcome_batch);
 }
 
-pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement<3>>) -> Tensor<1>{
-    let (state_batch,
-         mcts_posterior_batch,
-         outcome_batch) = training_batch_2_tensor(v);
-    let (tard_policy_batch, tard_value_batch) = t.forward(state_batch);
+
+
+pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor<1>{
+    let batch = TrainingBatch::from_training_elements(v);
+    let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
     
     // policy networkloss
-    let mcts_posterior_probs = mcts_posterior_batch.exp();
+    let mcts_posterior_probs = batch.mcts_posterior.exp();
     let cross_entropy_terms = mcts_posterior_probs * tard_policy_batch;
     let cross_entropy_loss = cross_entropy_terms.sum_dim(1)
                                                 .neg()
                                                 .mean();
 
     // value network loss
-    let mse_loss = (tard_value_batch - outcome_batch).powf_scalar(2.0)
+    let mse_loss = (tard_value_batch - batch.outcome).powf_scalar(2.0)
                                                      .mean();
     
     info!("CrossEntropyLoss: {}   MseLoss: {}", cross_entropy_loss, mse_loss);

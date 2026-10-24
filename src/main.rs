@@ -1,8 +1,7 @@
 use tracing::{Level, debug, info};
 use tracing_subscriber;
-use tch::IValue::Device;
-use tch::nn::{self, BatchNormConfig, LinearConfig, OptimizerConfig, linear};
-use tch::Tensor;
+use burn::tensor::{Tensor, Device};
+use burn::optim::{Adam, AdamConfig, GradientsParams};
 
 mod tard;
 mod engine;
@@ -32,51 +31,44 @@ use engine::GameState;
 
 fn main(){
     tracing_subscriber::fmt()
-        .with_max_level(Level::INFO) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
+        .with_max_level(Level::DEBUG) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
         .init();
     train_tard();
 }
 
 fn train_tard(){
-    let device = tch::Device::cuda_if_available();
-    match device {
-        tch::Device::Cpu => info!("CUDA is not available. Falling back to CPU."),
-        tch::Device::Cuda(id) => info!("CUDA is available! Using GPU device ID: {}", id),
-        _ => println!("Using device: {:?}", device),
-    }
-    let vs = nn::VarStore::new(device);
-    let tard = tard::Tard::new(&vs.root(),
-                               PenteState::N_TENSOR_CHANNELS as i64,
-                               pente::ROWS as i64,
-                               pente::COLS as i64);
-    let mut opt = nn::adam(0.9, 0.99, 0.0).build(&vs, 3e-4).unwrap();
-    let mut trn_buf = tard::TrainingBuffer::<50000>::new();
+    let device = Device::default();
+    info!("Using Device: {:?}", device);
+    let mut tard = tard::Tard::new(PenteState::N_CHAN, PenteState::ROWS, PenteState::COLS, &device);
+    debug!("{}", tard);
+    let mut opt = AdamConfig::new().init();
+    let mut trn_buf = tard::TrainingBuffer::<1000>::new();
 
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
     let training_size = 256;
     let n_rollouts = 200;
+    info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;
         while self_play_states_added < 3*training_size{
-            let _gaurd = tch::no_grad(||{
-                info!("Commencing self-play iteration {}", self_play_iter_n);
-                let training_data = engine::run_self_play::<PenteState>(&tard, n_rollouts);
-                info!("Added {} training elements to buffer", training_data.len());
-                self_play_states_added += training_data.len();
-                trn_buf.extend_front(training_data);
-                self_play_iter_n += 1;
-            });
+            info!("Commencing self-play iteration {}", self_play_iter_n);
+            let training_data = engine::run_self_play::<PenteState>(&tard, n_rollouts, &device);
+            info!("Added {} training elements to buffer", training_data.len());
+            self_play_states_added += training_data.len();
+            trn_buf.extend_front(training_data);
+            self_play_iter_n += 1;
+            
         }
         debug!("Training buffer size {}", trn_buf.len());
         for i in 0..20{
             info!("Commencing training iteration {}", trn_iter_n);
             let trn_sample = trn_buf.sample(training_size);
-            opt.zero_grad();
             let loss = tard::compute_loss(&tard, &trn_sample);
             info!("Loss: {}", loss);
-            loss.backward();
-            opt.step();
+            let grads = loss.backward();
+            let grad_params = GradientsParams::from_grads(grads, &tard);
+            tard = opt.step(1e-4, tard, grad_params);
             trn_iter_n += 1;
         }
     }

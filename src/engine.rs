@@ -1,4 +1,4 @@
-use burn::{Tensor, tensor::TensorData};
+use burn::tensor::{Tensor, Device, TensorData};
 use burn::tensor::activation::{log_softmax};
 use rand::prelude::*;
 use tracing::{trace, debug, info};
@@ -7,20 +7,22 @@ use std::{fmt};
 use crate::tard::{self, TrainingElement};
 
 type Action = usize;
-pub trait GameState<const D:usize>: Clone + fmt::Display{
-    const ACTN_SPC_SIZE: usize;
-    const N_TENSOR_CHANNELS: usize;
-    
+
+// Burn specific GameState Trait
+// GameState is an abstraction of a 2D board game.
+// State can be encoded into a rank 3 tensor [chan][row][col]
+pub trait GameState: Clone + fmt::Display{
+    const ACTN_SPC_SIZE: usize; // action space is [0, ACTN_SPC_SIZE).
+    const N_CHAN: usize;
+    const ROWS: usize;
+    const COLS: usize;
 
     fn new() -> Self;
 
-    fn to_tensor(&self) -> Tensor<D>;
+    fn to_tensor(&self) -> Tensor<3>;
 
     // usize tensor of 0's and 1's. 0=illegal. 1=legal
     fn legal_actions_mask(&self) -> Tensor<1>;
-
-    // Get vector of legal actions 
-    //fn legal_actions(&self) -> Vec<usize>;
 
     // Generate a random legal action (sampled uniformly)
     // Must only be called in non-terminal state.
@@ -45,14 +47,16 @@ pub trait GameState<const D:usize>: Clone + fmt::Display{
     //  +1 on Player 0 win
     //   0 on Draw
     //  -1 on Player 1 win
-    // TODO DEPRECATE
     fn get_objective_terminal_value(&self) -> i32;     
 }
 
-
-pub fn run_self_play <const D:usize, G: GameState<D>>(t: &tard::Tard, num_sims: u32) -> Vec<tard::TrainingElement>{
+pub fn run_self_play <G: GameState>(
+    t: &tard::Tard,
+    num_sims: u32,
+    device: &Device
+) -> Vec<tard::TrainingElement>{
     debug!("Running self play");
-    let mut te_vec = Vec::<tard::TrainingElement>::new();
+    let mut te_vec = Vec::new();
     let mut state = G::new();
     let mut move_n = 0;
     while !state.is_terminal(){
@@ -60,12 +64,12 @@ pub fn run_self_play <const D:usize, G: GameState<D>>(t: &tard::Tard, num_sims: 
         let mcts_posterior = mcts(&state, t, num_sims);
         debug!("{}", mcts_posterior);
         debug!("\n{}", state);
-        let action = mcts_posterior.clone().argmax(-1).into_scalar::<u32>() as usize;
+        let action = mcts_posterior.clone().exp().categorical(1).into_scalar::<u32>() as usize;
         debug!("Playing action: {}", action);
         let te = TrainingElement{
             state: state.to_tensor(),
             mcts_posterior: mcts_posterior,
-            outcome: 0.0,
+            outcome: Tensor::from_floats([0.0_f32], device)
         };
         te_vec.push(te);
         state.apply_action(action);
@@ -75,25 +79,32 @@ pub fn run_self_play <const D:usize, G: GameState<D>>(t: &tard::Tard, num_sims: 
      // Last element in te_vec is one state before terminal, so we start inverted.
     let mut polarity: f32 = -1.0; 
     for te in te_vec.iter_mut().rev(){
-        te.outcome = outcome * polarity;
+        te.outcome = Tensor::from_floats([outcome * polarity], device);
         polarity *= -1.0;
     }
     return te_vec;
 }
-// Run MCTS from the current state. State must be non-terminal. num sims >= 1
-pub fn mcts <GS: GameState> (state: &GS, t: &tard::Tard, num_sims: u32) -> Tensor<1>{
+
+
+// Run MCTS from the current state. State must be non-terminal. num sims >= 1.
+// Returns log probabiltiy posterior.
+pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> Tensor<1>{
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new();
-    for i in 0..num_sims{
+    for _ in 0..num_sims{
         mcts_sim(&mut tree, state, t);
     }
     let root = tree.get(0).unwrap();
     debug!("Root node: {}", root);
-    return mcts_tree_posterior(&tree, 0, GS::ACTN_SPC_SIZE);
+    return mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
 }
 
 // Performs a single MCTS simulation using PUCT
-fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard){
+fn mcts_sim(
+    tree: &mut MctsTree,
+    state_orig: &impl GameState,
+    t: &tard::Tard
+){
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
     loop{ // Drill down to a leaf node.
@@ -108,7 +119,6 @@ fn mcts_sim(tree: &mut MctsTree, state_orig: &impl GameState, t: &tard::Tard){
         }
     }
     // Is leaf node (possibly terminal)
-    let node = tree.get(node_id).unwrap();
     let value = 
         if state.is_terminal(){
             state.get_terminal_value() as f32
@@ -317,6 +327,6 @@ impl MctsTree{
 fn legalize_policy_tensor(p: &Tensor<1>, state: &impl GameState) -> Tensor<1>{
     let legal_mask = state.legal_actions_mask();
     let mut legalized = p.clone() + (legal_mask - 1) * 1e9;  // Makes log probabilities extremely negative so softmax results in probability 0.
-    legalized = log_softmax(p.clone(), -1);
+    legalized = log_softmax(legalized.clone(), 0);
     return legalized;
 }
