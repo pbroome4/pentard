@@ -149,7 +149,10 @@ impl TrainingBatch{
 
 
 pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor<1>{
-    let batch = TrainingBatch::from_training_elements(v);
+    let mut batch = TrainingBatch::from_training_elements(v);
+    batch.state = batch.state.autodiff().require_grad();
+    batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
+    batch.outcome = batch.outcome.autodiff().require_grad();
     let (tard_policy_batch, tard_value_batch) = t.forward(batch.state);
     
     // policy networkloss

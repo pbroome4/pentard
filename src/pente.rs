@@ -1,7 +1,6 @@
 use std::{fmt};
 use tracing::{trace, debug, info};
 use rand::prelude::*;
-use burn::{Tensor};
 
 use crate::engine::GameState;
 
