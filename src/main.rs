@@ -1,3 +1,4 @@
+use burn::module::Module;
 use tracing::{Level, debug, info};
 use tracing_subscriber;
 use burn::tensor::{Tensor, Device};
@@ -39,21 +40,26 @@ fn main(){
 fn train_tard(){
     let device = Device::default();
     info!("Using Device: {:?}", device);
-    let mut tard = tard::Tard::new(PenteState::N_CHAN, PenteState::ROWS, PenteState::COLS, &device);
+    let mut tard = tard::Tard::new(PenteState::N_CHAN,
+        PenteState::ROWS,
+        PenteState::COLS,
+        PenteState::ACTN_SPC_SIZE,
+        &device);
     debug!("{}", tard);
     let mut opt = AdamConfig::new().init();
-    let mut trn_buf = tard::TrainingBuffer::<1000>::new();
+    let mut trn_buf = tard::TrainingBuffer::<10000>::new();
 
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
     let training_size = 256;
-    let n_rollouts = 200;
+    let n_rollouts = 800;
     info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;
+        let inference_tard = tard.valid();
         while self_play_states_added < 3*training_size{
             info!("Commencing self-play iteration {}", self_play_iter_n);
-            let training_data = engine::run_self_play::<PenteState>(&tard, n_rollouts);
+            let training_data = engine::run_self_play::<PenteState>(&inference_tard, n_rollouts);
             info!("Added {} training elements to buffer", training_data.len());
             self_play_states_added += training_data.len();
             trn_buf.extend_front(training_data);

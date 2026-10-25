@@ -1,13 +1,12 @@
 use burn::prelude::*;
 use burn::nn::conv::{Conv2d, Conv2dConfig};
-use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig, PaddingConfig2d};
+use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig};
 use burn::tensor::Device;
 use burn::tensor::activation::{relu, tanh, log_softmax};
 use tracing::{trace, debug, info};
 use arraydeque::ArrayDeque;
+use std::collections::VecDeque;
 use rand::RngExt;
-use std::default;
-use std::ops::{Deref, DerefMut};
 
 
 #[derive(Debug, Module)]
@@ -33,7 +32,7 @@ pub struct Tard{
     value_fc2: Linear,
 }
 impl Tard {
-    pub fn new(in_chan: usize, rows: usize, cols: usize, device: &Device) -> Self {
+    pub fn new(in_chan: usize, rows: usize, cols: usize, action_space_size:usize, device: &Device) -> Self {
         info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
         let conv1 = Conv2dConfig::new([in_chan, 64], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
@@ -55,7 +54,7 @@ impl Tard {
 
         let value_conv = Conv2dConfig::new([64, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(rows * cols, 64).init(device);
+        let value_fc1 = LinearConfig::new(action_space_size, 64).init(device);
         let value_fc2 = LinearConfig::new(64, 1).init(device);
 
         let s = Self {
@@ -171,13 +170,13 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor<1>{
 
 
 pub struct TrainingBuffer<const CAP: usize>{
-    memory_: ArrayDeque<TrainingElement, CAP>,
+    memory_: VecDeque<TrainingElement>,
 }
 
 impl<const CAP: usize> TrainingBuffer<CAP> {
     pub fn new() -> Self {
         return Self{
-            memory_: ArrayDeque::<TrainingElement, CAP>::new(),
+            memory_: VecDeque::<TrainingElement>::with_capacity(CAP),
         };
     }
 
@@ -192,19 +191,16 @@ impl<const CAP: usize> TrainingBuffer<CAP> {
         }
         return v;
     }
-}
 
-// Transparently expose all other ArrayDeque methods
-impl <const CAP: usize> Deref for TrainingBuffer<CAP>{
-    type Target = ArrayDeque<TrainingElement, CAP>;
-    fn deref(&self) -> &Self::Target {
-        &self.memory_
+    pub fn extend_front<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = TrainingElement>,
+    {
+        return self.memory_.extend(iter);
     }
-}
 
-impl <const CAP: usize> DerefMut for TrainingBuffer<CAP>{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        return &mut self.memory_;
+    pub fn len(&self) -> usize{
+        return self.memory_.len();
     }
 }
 

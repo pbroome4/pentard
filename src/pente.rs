@@ -31,7 +31,7 @@ pub struct PenteState{
 
 impl GameState for PenteState{
     const ACTN_SPC_SIZE: usize = PenteState::ROWS * PenteState::COLS;
-    const N_CHAN:usize = 4;
+    const N_CHAN:usize = 5;
     const ROWS:usize = 9;
     const COLS:usize = 9;
     
@@ -39,28 +39,28 @@ impl GameState for PenteState{
         return PenteState::new();
     }
 
-    // Output (num_channel=4) x ROWS x COLS Tensor.
-    // channel 0 is occupancy mask of active player
-    // channel 1 is occupancy mask of inactive player
-    // channel 2 is captures of active player
-    // channel 3 is captures of inactive player
+    // Output (n_chan) x ROWS x COLS Tensor.
+    // channel 0 is occupancy mask of player 0 "black"
+    // channel 1 is occupancy mask of player 1 "white"
+    // channel 2 is current players turn. 0 or 1
+    // channel 3 is captures of active player
+    // channel 4 is captures of inactive player
     fn to_tensor(&self) -> Tensor<3> {
         let mut a = [[[0.0; PenteState::COLS]; PenteState::ROWS]; PenteState::N_CHAN];
-        let b_chan = if self.is_black() {0} else {1};
-        let w_chan = if self.is_black() {1} else {0}; 
         for r in 0..PenteState::ROWS{
             for c in 0..PenteState::COLS{
                 if self.board_[r][c] == Piece::Black{
-                    a[b_chan][r][c] = 1.0;
+                    a[0][r][c] = 1.0;
                 }else if self.board_[r][c] == Piece::White{
-                    a[w_chan][r][c] = 1.0;
+                    a[1][r][c] = 1.0;
                 }
-                a[b_chan+2][r][c] = self.b_caps_ as f32;
-                a[w_chan+2][r][c] = self.w_caps_ as f32;
+                a[2][r][c] = if self.is_black_ {0.0} else {1.0};
+                a[3][r][c] = self.b_caps_ as f32;
+                a[4][r][c] = self.w_caps_ as f32;
             }
         }
         let t = Tensor::<3>::from_floats(a, &Default::default())
-                       .reshape([4, PenteState::ROWS, PenteState::COLS]);
+                       .reshape([PenteState::N_CHAN, PenteState::ROWS, PenteState::COLS]);
         return t;
     }
 
@@ -117,17 +117,8 @@ impl GameState for PenteState{
         return self.is_terminal_ != Piece::Empty;
     }
     
-    
-    fn get_terminal_value(&self) -> i32 {
-        // If it is your turn in terminal state, its a draw or a loss.
-        if self.is_terminal_ == Piece::Sentinel{
-            return 0;
-        }
-        return -1; 
-    }
 
-
-    fn get_objective_terminal_value(&self) -> i32{
+    fn get_terminal_value(&self) -> i32{
         if self.is_terminal_ == Piece::Black{
             return 1;
         }else if self.is_terminal_ == Piece::White{
@@ -135,8 +126,6 @@ impl GameState for PenteState{
         }
         return 0;
     }
-
-
 }
 
 

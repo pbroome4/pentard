@@ -18,7 +18,7 @@ pub trait GameState: Clone + fmt::Display{
 
     fn new() -> Self;
 
-    fn to_tensor(&self) -> Tensor<3>;
+    fn to_tensor(&self) -> Tensor<3>; // consider making vec to make library agnostic
 
     // usize tensor of 0's and 1's. 0=illegal. 1=legal
     fn legal_actions_mask(&self) -> Tensor<1>;
@@ -36,17 +36,10 @@ pub trait GameState: Clone + fmt::Display{
     fn is_terminal(&self) -> bool;
 
     // Returns:
-    //  +1 on current player win
-    //   0 on Draw
-    //  -1 on current player loss.
-    // Note: for games like pente/chess, current player will only ever draw/lose.
-    fn get_terminal_value(&self) -> i32;
-
-    // Returns:
     //  +1 on Player 0 win
     //   0 on Draw
     //  -1 on Player 1 win
-    fn get_objective_terminal_value(&self) -> i32;     
+    fn get_terminal_value(&self) -> i32;     
 }
 
 pub fn run_self_play <G: GameState>(
@@ -81,11 +74,8 @@ pub fn run_self_play <G: GameState>(
         move_n += 1;
     }
     let outcome = state.get_terminal_value() as f32;
-     // Last element in te_vec is one state before terminal, so we start inverted.
-    let mut polarity: f32 = -1.0; 
-    for te in te_vec.iter_mut().rev(){
-        te.outcome = Tensor::from_floats([outcome * polarity], &device);
-        polarity *= -1.0;
+    for te in te_vec.iter_mut(){
+        te.outcome = Tensor::from_floats([outcome], &device);
     }
     return te_vec;
 }
@@ -95,7 +85,7 @@ pub fn run_self_play <G: GameState>(
 // Returns log probabiltiy posterior.
 pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f32>, Vec<f32>){
     // Run mcts and return the evaluated mcts policy
-    let mut tree: MctsTree = MctsTree::new();
+    let mut tree: MctsTree = MctsTree::new(1.0);
     for _ in 0..num_sims{
         mcts_sim(&mut tree, state, t);
     }
@@ -103,6 +93,7 @@ pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f3
     debug!("Mcts root node: {}", root);
     let mcts_pri = mcts_tree_prior(&tree, 0, G::ACTN_SPC_SIZE);
     let mcts_post = mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
+    trace!("total probs should be 1.0. mcts_pri: {}  mcts_post: {}", total_prob(&mcts_pri), total_prob(&mcts_post));
     return (mcts_pri, mcts_post);
 }
 
@@ -218,12 +209,14 @@ impl <'a>Iterator for Children<'a>{
 // Root node has NodeId == 0;
 pub struct MctsTree {
     nodes_: Vec<MctsNode>,
+    c_puct: f32,
 }
 
 impl MctsTree{
-    pub fn new() -> Self{
+    pub fn new(c_puct: f32) -> Self{
         let mut x = Self{
             nodes_: Vec::new(),
+            c_puct: c_puct // c hyperparameter. Typically 1.0 to 2.5. More complex models will adjust this over time.
         };
         let root = MctsNode{
             parent: None,
@@ -254,11 +247,9 @@ impl MctsTree{
     
     fn back_propogate(&mut self, node_id: NodeId, value: f32){
         let mut curr_id = node_id;
-        let mut polarity: f32 = 1.0;
         while let Some(curr) = self.get_mut(curr_id){
-            curr.value += value * polarity;
+            curr.value += value;
             curr.visits += 1;
-            polarity *= -1.0;
             if let Some(parent_id) = curr.parent{
                 curr_id = parent_id;
             }else{
@@ -273,10 +264,10 @@ impl MctsTree{
     // Calling on node_id that are not expanded is UB.
     fn puct_select(&self, node_id:NodeId) -> (NodeId, Action){
         let mut best_child_id = usize::MAX;
-        let mut best_score = f32::MIN;
+        let mut best_score = f32::NAN;
         for child_id in self.children(node_id){
             let score = self.calc_puct(child_id);
-            if score > best_score{
+            if best_score.is_nan() || score > best_score{
                 best_child_id = child_id;
                 best_score = score;
             }
@@ -288,16 +279,17 @@ impl MctsTree{
     // Calculates PUCT score for a given node.
     // Node must have a parent. 
     fn calc_puct(&self, node_id: NodeId) -> f32{
-        let c = 1.5;    // c hyperparameter. Typically 1.0 to 2.5. More complex models will adjust this over time.
         let node = self.get(node_id).unwrap();
         let parent = self.get(node.parent.unwrap()).unwrap();
         let exploitation_term =
             if node.visits == 0{
                 0.0
             }else{
-                node.value / (node.visits as f32)
+                let polarity = if self.depth(node_id)%2==0 {1.0} else {-1.0};
+                // polarity determines if we are minimizing or maximizing player
+                polarity * node.value / (node.visits as f32)
             };
-        let exploration_term = c * node.prior * (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
+        let exploration_term = self.c_puct * node.prior * (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
         return exploitation_term + exploration_term;
     }
     
@@ -340,6 +332,16 @@ impl MctsTree{
         trace!("Added child {}", child_id);
         return child_id;
     }
+
+    fn depth(&self, node_id:NodeId) -> usize {
+        let mut count = 0;
+        let mut curr_id = node_id;
+        while let Some(next_id) = self.get(curr_id).unwrap().parent{
+            curr_id = next_id;
+            count += 1;
+        } 
+        return count;
+    }
 }
 
 // p is log probability
@@ -349,4 +351,15 @@ fn legalize_policy_tensor(p: &Tensor<1>, state: &impl GameState) -> Tensor<1>{
     let mut legalized = p.clone() + (legal_mask - 1) * 1e9;  // Makes log probabilities extremely negative so softmax results in probability 0.
     legalized = log_softmax(legalized.clone(), 0);
     return legalized;
+}
+
+
+// p is potentailly unormalized log probabilities.
+// Returns the sum(exp(p));
+fn total_prob(p: &Vec<f32>)->f32{
+    let mut sum = 0.0;
+    for f in p{
+        sum += f.exp();
+    }
+    return sum;
 }
