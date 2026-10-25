@@ -58,13 +58,13 @@ fn train_tard(){
     debug!("{}", tard);
     let mut t_loss: tard::TardLoss = Default::default();
     let mut opt = AdamConfig::new().init();
-    let mut trn_buf = tard::TrainingBuffer::<10000>::new();
+    let mut trn_buf = tard::TrainingBuffer::<50000>::new();
     let om = OutputManager::new("output", false).unwrap();
 
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
     let training_size = 64;
-    let n_rollouts = 400;
+    let n_rollouts = 200;
     info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;

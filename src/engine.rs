@@ -1,8 +1,8 @@
 use burn::module::Module;
+use burn::tensor::DeviceIndex::Specified;
 use burn::tensor::{Device, Tensor, TensorData};
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
-use tracing::dispatcher::with_default;
 use tracing::{trace, debug, info};
 use std::{fmt, vec};
 use rand;
@@ -43,6 +43,7 @@ pub fn run_self_play <G: GameState>(
         debug!("Playing action: {}", action);
         g.apply_action(action);
     }
+    debug!("Current State: \n{}", g);
     let outcome = g.get_terminal_value() as f32;
     // sp_vec has list of all non-terminal states.
     // outcome is relative to terminal state. So we iterate
@@ -52,34 +53,12 @@ pub fn run_self_play <G: GameState>(
         spe.outcome = polarity * outcome;
         polarity *= -1.0;
     }
-    return selfplay_to_training(sp_vec, &device);
+    trace!("{:?}", &sp_vec);
+    let te_vec =  selfplay_to_training(sp_vec, &device);
+    return te_vec;
 }
 
-
-//        let mcts_tens_d = TensorData::new(mcts_post, [G::ACTN_SPC_SIZE]);
-//        let mcts_tens = Tensor::from_floats(mcts_tens_d, &device);
-//        let action = mcts_tens.clone()
-//                              .exp()
-//                              .categorical(1)
-//                              .into_scalar::<u32>() as usize;
-//        debug!("Playing action: {}", action);
-//        let td = TensorData::new(state.to_tensor(),
-//                                 [G::N_CHAN, G::ROWS, G::COLS]);
-//        let te = TrainingElement{
-//            state: Tensor::from_data(td, &device),
-//            mcts_posterior: mcts_tens,
-//            outcome: Tensor::from_floats([0.0_f32], &device)
-//        };
-//        te_vec.push(te);
-//        state.apply_action(action);
-//        move_n += 1;
-//    }
-//    let outcome = state.get_terminal_value() as f32;
-//    for te in te_vec.iter_mut(){
-//        te.outcome = Tensor::from_floats([outcome], &device);
-//    }
-//    return te_vec;
-
+#[derive(Debug)]
 struct SelfPlayElement<G:GameState>{
     g: G,
     mcts_post: Vec<f32>,
@@ -118,7 +97,7 @@ pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f3
     debug!("Mcts root node: {}", root);
     let mcts_pri = mcts_tree_prior(&tree, 0, G::ACTN_SPC_SIZE);
     let mcts_post = mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
-    trace!("total probs should be 1.0. mcts_pri: {}  mcts_post: {}", total_prob(&mcts_pri), total_prob(&mcts_post));
+    debug!("total probs should be 1.0. mcts_pri: {}  mcts_post: {}", total_prob(&mcts_pri), total_prob(&mcts_post));
     return (mcts_pri, mcts_post);
 }
 
@@ -304,7 +283,7 @@ impl MctsTree{
         return (best_child_id, action);
     }
 
-    // Calculates PUCT score for a given node.
+    // Calculates PUCT score for a given node relative to its parent.
     // Node must have a parent. 
     fn calc_puct(&self, node_id: NodeId) -> f32{
         let node = self.get(node_id).unwrap();
@@ -403,7 +382,7 @@ fn normalize(mut v: Vec<f32>) -> Vec<f32> {
     return v;
 }
 
-// p is potentailly unormalized log probabilities.
+// p is (potentailly unormalized) log probabilities.
 // Returns the sum(exp(p));
 fn total_prob(p: &Vec<f32>)->f32{
     let mut sum = 0.0;

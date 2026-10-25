@@ -4,19 +4,18 @@ use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig};
 use burn::tensor::Device;
 use burn::tensor::activation::{relu, tanh, log_softmax};
 use tracing::{trace, debug, info};
+use core::fmt;
 use std::collections::VecDeque;
+use std::fmt::write;
 use rand::RngExt;
 
 
 #[derive(Debug, Module)]
 pub struct Tard{
     // 1. Shared Feature Extractor (Convolutional Trunk)
-    conv1: Conv2d,
-    conv2: Conv2d,
-    conv3: Conv2d,
+    conv1: Conv2d, // initial convolutional block
     bn1: BatchNorm,
-    bn2: BatchNorm,
-    bn3: BatchNorm,
+    resnets: Vec<ResNet>, // a couple of feed forward "residual networks"
 
     // 2. Policy Head (Decides which move to make)
     // Output log probability of move to make
@@ -31,38 +30,35 @@ pub struct Tard{
     value_fc2: Linear,
 }
 impl Tard {
-    pub fn new(in_chan: usize, rows: usize, cols: usize, action_space_size:usize, device: &Device) -> Self {
+    pub fn new(in_chan: usize,
+               rows: usize,
+               cols: usize,
+               action_space_size:usize,
+               device: &Device) -> Self
+    {
         info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
-        let conv1 = Conv2dConfig::new([in_chan, 64], [3, 3])
+        let conv1 = Conv2dConfig::new([in_chan, 128], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
-        let conv2 = Conv2dConfig::new([64, 64], [3, 3])
-            .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
-            .init(device);
-        let conv3 = Conv2dConfig::new([64, 64], [3, 3])
-            .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
-            .init(device);
+        let bn1 = BatchNormConfig::new(128).init(device);
+        let mut resnets = Vec::new();
+        for i in 0..12{ // 12 resnet layers
+            resnets.push(ResNet::new(128, device));
+        }
 
-        let bn1 = BatchNormConfig::new(64).init(device);
-        let bn2 = BatchNormConfig::new(64).init(device);
-        let bn3 = BatchNormConfig::new(64).init(device);
-
-        let policy_conv = Conv2dConfig::new([64, 2], [1, 1]).init(device);
+        let policy_conv = Conv2dConfig::new([128, 2], [1, 1]).init(device);
         let policy_bn = BatchNormConfig::new(2).init(device);
         let policy_fc = LinearConfig::new(2 * rows * cols, rows * cols).init(device);
 
-        let value_conv = Conv2dConfig::new([64, 1], [1, 1]).init(device);
+        let value_conv = Conv2dConfig::new([128, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(action_space_size, 64).init(device);
-        let value_fc2 = LinearConfig::new(64, 1).init(device);
+        let value_fc1 = LinearConfig::new(action_space_size, 128).init(device);
+        let value_fc2 = LinearConfig::new(128, 1).init(device);
 
         let s = Self {
                 conv1,
-                conv2,
-                conv3,
                 bn1,
-                bn2,
-                bn3,
+                resnets,
                 policy_conv,
                 policy_bn,
                 policy_fc,
@@ -78,15 +74,10 @@ impl Tard {
         // 1. Convolutional Trunk
         let x = self.conv1.forward(x);
         let x = self.bn1.forward(x);
-        let x = relu(x);
-
-        let x = self.conv2.forward(x);
-        let x = self.bn2.forward(x);
-        let x = relu(x);
-
-        let x = self.conv3.forward(x);
-        let x = self.bn3.forward(x);
-        let x = relu(x);
+        let mut x = relu(x);
+        for resnet in self.resnets.iter(){
+            x = resnet.forward(x);
+        }
 
         // 2. Policy Head
         let p = self.policy_conv.forward(x.clone());
@@ -111,8 +102,48 @@ impl Tard {
     }
 }
 
+#[derive(Debug, Module)]
+struct ResNet{
+    conv1: Conv2d,
+    conv2: Conv2d,
+    bn1: BatchNorm,
+    bn2: BatchNorm,
+}
+
+impl ResNet{
+    fn new(num_chan:usize, device: &Device) -> Self{
+         let conv1 = Conv2dConfig::new([num_chan, num_chan], [3, 3])
+            .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
+            .init(device);
+        let conv2 = Conv2dConfig::new([num_chan, num_chan], [3, 3])
+            .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
+            .init(device);
+        
+        let bn1 = BatchNormConfig::new(num_chan).init(device);
+        let bn2 = BatchNormConfig::new(num_chan).init(device);
+        let s = Self{
+            conv1: conv1,
+            conv2: conv2,
+            bn1: bn1,
+            bn2:bn2
+        };
+        return s;
+    }
+
+    fn forward(&self, x: Tensor<4>) -> Tensor<4>{
+        let identity = x.clone();
+        let out = self.conv1.forward(x);
+        let out = self.bn1.forward(out);
+        let out = relu(out);
+        let out = self.conv2.forward(out);
+        let out = self.bn2.forward(out);
+        let out = relu(out.clone() + identity);
+        return out;
+    }
+}
+
 ////// Training structures and Batch Utilities ////
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrainingElement{
     pub state: Tensor<3>,       
     pub mcts_posterior: Tensor<1>,
@@ -138,13 +169,23 @@ impl TrainingBatch{
         let state_batch = Tensor::stack(states, 0);
         let mcts_posterior_batch = Tensor::stack(mcts_posteriors, 0);
         let outcome_batch = Tensor::stack(outcomes, 0);
-        Self{
-            state:state_batch,
-            mcts_posterior:mcts_posterior_batch,
-            outcome:outcome_batch
-        }
+        let s = Self{
+                state:state_batch,
+                mcts_posterior:mcts_posterior_batch,
+                outcome:outcome_batch
+            };
+        debug!("Training batch stats:\n {}", s);
+        return s;
     }
 }
+
+impl fmt::Display for TrainingBatch{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.outcome)?;
+        return Ok(());
+    }
+}
+
 
 #[derive(Debug)]
 pub struct TardLoss{
@@ -187,6 +228,7 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
                                                 .mean();
 
     // value network loss
+    debug!("{}", tard_value_batch);
     let mse_loss = (tard_value_batch - batch.outcome).powf_scalar(2.0)
                                                      .mean();
     

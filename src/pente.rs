@@ -14,7 +14,7 @@ pub enum Piece{
     Sentinel = 3, 
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PenteState{
     board_: [[Piece; PenteState::COLS]; PenteState::ROWS],
     b_caps_: u8, 
@@ -74,25 +74,6 @@ impl GameState for PenteState{
         }
         return v;
     }
-
-    // Must only call in non-terminal state. 
-    // Calling in a terminal state is UB
-    // (here we opt to return usize::MAX so errors are visible quickly)
-    //fn get_random_action(&self) -> usize{
-    //    let mut action = usize::MAX;
-    //    let mut actions_count = 0;
-    //    for row in 0..PenteState::ROWS{
-    //        for col in 0..PenteState::COLS{
-    //            if self.board_[row][col] == Piece::Empty{
-    //                actions_count += 1;
-    //                if rand::rng().random_range(0..actions_count) == 0{
-    //                    action = coord_2_action(row,col);
-    //                }
-    //            }
-    //        }
-    //    }
-    //    return action;
-    //}
     
     fn apply_action(&mut self, action: usize){
         trace!("Applying action {}", action);
