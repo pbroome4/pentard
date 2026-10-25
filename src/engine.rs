@@ -1,8 +1,11 @@
 use burn::module::Module;
-use burn::tensor::{Tensor, TensorData};
-use burn::tensor::activation::{log_softmax};
+use burn::tensor::{Device, Tensor, TensorData};
+use rand::distr::Distribution;
+use rand::distr::weighted::WeightedIndex;
+use tracing::dispatcher::with_default;
 use tracing::{trace, debug, info};
-use std::{fmt};
+use std::{fmt, vec};
+use rand;
 
 use crate::tard::{self, TrainingElement};
 use crate::gamestate::{GameState, Action};
@@ -18,36 +21,86 @@ pub fn run_self_play <G: GameState>(
                   .into_iter()
                   .next()
                   .expect("Expected at least one device");
-    let mut te_vec = Vec::new();
-    let mut state = G::new();
+    let mut sp_vec = Vec::new();
+    let mut g = G::new();
     let mut move_n = 0;
-    while !state.is_terminal(){
-        debug!("Current State: \n{}", state);
+    while !g.is_terminal(){
+        debug!("Current State: \n{}", g);
         debug!("Computing self-play move#: {}", move_n);
-        let (mcts_pri, mcts_post) = mcts(&state, t, num_sims);
-        debug!("MCTS prior logits: {:?}", mcts_pri);
-        debug!("MCTS posterior logits:{:?}", mcts_post);
-        let mcts_tens_d = TensorData::new(mcts_post, [G::ACTN_SPC_SIZE]);
-        let mcts_tens = Tensor::from_floats(mcts_tens_d, &device);
-        let action = mcts_tens.clone()
-                              .exp()
-                              .categorical(1)
-                              .into_scalar::<u32>() as usize;
+        let (mcts_pri, mcts_post) = mcts(&g, t, num_sims);
+        debug!("MCTS prior logits: {:?}", &mcts_pri);
+        debug!("MCTS posterior logits:{:?}", &mcts_post);
+        let mcts_prob = exp(&mcts_post);
+        let action = WeightedIndex::new(&mcts_prob)
+                                   .unwrap()
+                                   .sample(&mut rand::rng());
+        let sp_element = SelfPlayElement{
+            g: g.clone(),
+            mcts_post: mcts_post,
+            outcome: 0.0
+        };
+        sp_vec.push(sp_element);
         debug!("Playing action: {}", action);
-        let td = TensorData::new(state.to_tensor(),
-                                 [G::N_CHAN, G::ROWS, G::COLS]);
+        g.apply_action(action);
+    }
+    let outcome = g.get_terminal_value() as f32;
+    // sp_vec has list of all non-terminal states.
+    // outcome is relative to terminal state. So we iterate
+    // in reverse and polarity starts at -1.0
+    let mut polarity = -1.0;
+    for spe in sp_vec.iter_mut().rev(){
+        spe.outcome = polarity * outcome;
+        polarity *= -1.0;
+    }
+    return selfplay_to_training(sp_vec, &device);
+}
+
+
+//        let mcts_tens_d = TensorData::new(mcts_post, [G::ACTN_SPC_SIZE]);
+//        let mcts_tens = Tensor::from_floats(mcts_tens_d, &device);
+//        let action = mcts_tens.clone()
+//                              .exp()
+//                              .categorical(1)
+//                              .into_scalar::<u32>() as usize;
+//        debug!("Playing action: {}", action);
+//        let td = TensorData::new(state.to_tensor(),
+//                                 [G::N_CHAN, G::ROWS, G::COLS]);
+//        let te = TrainingElement{
+//            state: Tensor::from_data(td, &device),
+//            mcts_posterior: mcts_tens,
+//            outcome: Tensor::from_floats([0.0_f32], &device)
+//        };
+//        te_vec.push(te);
+//        state.apply_action(action);
+//        move_n += 1;
+//    }
+//    let outcome = state.get_terminal_value() as f32;
+//    for te in te_vec.iter_mut(){
+//        te.outcome = Tensor::from_floats([outcome], &device);
+//    }
+//    return te_vec;
+
+struct SelfPlayElement<G:GameState>{
+    g: G,
+    mcts_post: Vec<f32>,
+    outcome: f32
+}
+
+fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>, device: &Device) -> Vec<TrainingElement>{
+    let mut te_vec = Vec::with_capacity(sp_vec.len());
+    for spe in sp_vec.into_iter(){
+        let state_td = TensorData::new(spe.g.to_tensor(),
+                                   [G::N_CHAN, G::ROWS, G::COLS]);
+        let state = Tensor::from_data(state_td, device);
+        let mcts_td = TensorData::new(spe.mcts_post, [G::ACTN_SPC_SIZE]);
+        let mcts_post = Tensor::from_data(mcts_td, device);
+        let outcome = Tensor::from_floats([spe.outcome], device);
         let te = TrainingElement{
-            state: Tensor::from_data(td, &device),
-            mcts_posterior: mcts_tens,
-            outcome: Tensor::from_floats([0.0_f32], &device)
+            state: state,
+            mcts_posterior: mcts_post,
+            outcome: outcome
         };
         te_vec.push(te);
-        state.apply_action(action);
-        move_n += 1;
-    }
-    let outcome = state.get_terminal_value() as f32;
-    for te in te_vec.iter_mut(){
-        te.outcome = Tensor::from_floats([outcome], &device);
     }
     return te_vec;
 }
@@ -220,8 +273,10 @@ impl MctsTree{
     
     fn back_propogate(&mut self, node_id: NodeId, value: f32){
         let mut curr_id = node_id;
+        let mut polarity = 1.0;
         while let Some(curr) = self.get_mut(curr_id){
-            curr.value += value;
+            curr.value += value * polarity;
+            polarity *= -1.0;
             curr.visits += 1;
             if let Some(parent_id) = curr.parent{
                 curr_id = parent_id;
@@ -258,9 +313,7 @@ impl MctsTree{
             if node.visits == 0{
                 0.0
             }else{
-                let polarity = if self.depth(node_id)%2==0 {1.0} else {-1.0};
-                // polarity determines if we are minimizing or maximizing player
-                polarity * node.value / (node.visits as f32)
+                -1.0 * node.value / (node.visits as f32)
             };
         let exploration_term = self.c_puct * node.prior *
                               (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
@@ -358,4 +411,13 @@ fn total_prob(p: &Vec<f32>)->f32{
         sum += f.exp();
     }
     return sum;
+}
+
+// exponentiate ever element in the vector
+fn exp (v: &Vec<f32>) -> Vec<f32>{
+    let mut o = Vec::with_capacity(v.len());
+    for e in v.iter(){
+        o.push((*e).exp());
+    }
+    return o;
 }

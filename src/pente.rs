@@ -30,7 +30,7 @@ pub struct PenteState{
 
 impl GameState for PenteState{
     const ACTN_SPC_SIZE: usize = PenteState::ROWS * PenteState::COLS;
-    const N_CHAN:usize = 5;
+    const N_CHAN:usize = 4;
     const ROWS:usize = 9;
     const COLS:usize = 9;
     
@@ -39,27 +39,27 @@ impl GameState for PenteState{
     }
 
     // Output (n_chan) x ROWS x COLS Tensor.
-    // channel 0 is occupancy mask of player 0 "black"
-    // channel 1 is occupancy mask of player 1 "white"
-    // channel 2 is current players turn. 0 or 1
-    // channel 3 is captures of active player
-    // channel 4 is captures of inactive player
+    // channel 0 is occupancy mask of current player
+    // channel 1 is captures of current player
+    // channel 2 is occupancy mask of opponent 
+    // channel 3 is captures of opponent 
     fn to_tensor(&self) -> Vec<f32> {
         let mut a = vec![0.0; PenteState::COLS * PenteState::ROWS * PenteState::N_CHAN];
         fn index(chan: usize, row: usize, col: usize) -> usize{
             return chan*PenteState::ROWS * PenteState::COLS +
                    row * PenteState::COLS + col;
         }
+        let b_ofst = if self.is_black_ {0} else {2};
+        let w_ofst = if self.is_black_ {2} else {0};
         for r in 0..PenteState::ROWS{
             for c in 0..PenteState::COLS{
                 if self.board_[r][c] == Piece::Black{
-                    a[index(0,r,c)] = 1.0;
+                    a[index(b_ofst, r, c)] = 1.0;
                 }else if self.board_[r][c] == Piece::White{
-                    a[index(1,r,c)] = 1.0;
+                    a[index(w_ofst, r, c)] = 1.0;
                 }
-                a[index(2,r,c)] = if self.is_black_ {0.0} else {1.0};
-                a[index(3,r,c)] = self.b_caps_ as f32;
-                a[index(4,r,c)] = self.w_caps_ as f32;
+                a[index(b_ofst + 1,r,c)] = self.b_caps_ as f32;
+                a[index(w_ofst + 1,r,c)] = self.w_caps_ as f32;
             }
         }
         return a;
@@ -119,12 +119,10 @@ impl GameState for PenteState{
     
 
     fn get_terminal_value(&self) -> i32{
-        if self.is_terminal_ == Piece::Black{
-            return 1;
-        }else if self.is_terminal_ == Piece::White{
-            return -1;
+        if self.is_terminal_ == Piece::Sentinel{
+            return 0;
         }
-        return 0;
+        return -1;
     }
 }
 

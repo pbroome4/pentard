@@ -29,8 +29,10 @@ pub trait GameState: Clone + fmt::Display{
     fn is_terminal(&self) -> bool;
 
     // Returns:
-    //  +1 on Player 0 win
+    //  +1 on Current player win
     //   0 on Draw
-    //  -1 on Player 1 win
+    //  -1 on Opponent win
+    // note for games like chess will always be 0 or -1 because
+    // game ends when current player has no moves (draw or checkmated). 
     fn get_terminal_value(&self) -> i32;     
 }

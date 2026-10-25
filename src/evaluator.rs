@@ -58,7 +58,7 @@ struct BatchedEvalResponse{
 
 struct BatchedEvalRequest<G: GameState>{
     g: G,
-    resp_chan: Sender<CrossbeamEvalResponse>    // one-shot respone channel
+    resp_chan: Sender<BatchedEvalResponse>    // one-shot respone channel
 }
 
 
@@ -69,7 +69,7 @@ struct BatchedEvalRequest<G: GameState>{
 // queue and return individual evaluation result.
 struct BatchedTardEvaluator <G:GameState>{
     t: Tard,
-    s: Sender<CrossbeamEvalRequest<G>>
+    s: Sender<BatchedEvalRequest<G>>
 } 
 
 impl <G:GameState> Evaluate<G> for BatchedTardEvaluator<G>{
@@ -81,14 +81,14 @@ impl <G:GameState> Evaluate<G> for BatchedTardEvaluator<G>{
                   .expect("Expected at least one device");
         let td = TensorData::new(g.to_tensor(),
                     [G::N_CHAN, G::ROWS, G::COLS]);
-        let t = Tensor::from_data(td, &device);
+        let t = Tensor::<3>::from_data(td, &device);
         let req = BatchedEvalRequest{
             g: g.clone(),
             resp_chan: s,
         };
         let resp = r.recv().unwrap(); // blocking to revieve response
-        
-    }
+        return (resp.p, resp.v);
+    }  
 }
 
 
