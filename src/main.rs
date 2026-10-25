@@ -52,7 +52,7 @@ fn train_tard(){
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
     let training_size = 256;
-    let n_rollouts = 800;
+    let n_rollouts = 400;
     info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;

@@ -45,34 +45,35 @@ impl GameState for PenteState{
     // channel 2 is current players turn. 0 or 1
     // channel 3 is captures of active player
     // channel 4 is captures of inactive player
-    fn to_tensor(&self) -> Tensor<3> {
-        let mut a = [[[0.0; PenteState::COLS]; PenteState::ROWS]; PenteState::N_CHAN];
+    fn to_tensor(&self) -> Vec<f32> {
+        let mut a = vec![0.0; PenteState::COLS * PenteState::ROWS * PenteState::N_CHAN];
+        fn index(chan: usize, row: usize, col: usize) -> usize{
+            return chan*PenteState::ROWS * PenteState::COLS +
+                   row * PenteState::COLS + col;
+        }
         for r in 0..PenteState::ROWS{
             for c in 0..PenteState::COLS{
                 if self.board_[r][c] == Piece::Black{
-                    a[0][r][c] = 1.0;
+                    a[index(0,r,c)] = 1.0;
                 }else if self.board_[r][c] == Piece::White{
-                    a[1][r][c] = 1.0;
+                    a[index(1,r,c)] = 1.0;
                 }
-                a[2][r][c] = if self.is_black_ {0.0} else {1.0};
-                a[3][r][c] = self.b_caps_ as f32;
-                a[4][r][c] = self.w_caps_ as f32;
+                a[index(2,r,c)] = if self.is_black_ {0.0} else {1.0};
+                a[index(3,r,c)] = self.b_caps_ as f32;
+                a[index(4,r,c)] = self.w_caps_ as f32;
             }
         }
-        let t = Tensor::<3>::from_floats(a, &Default::default())
-                       .reshape([PenteState::N_CHAN, PenteState::ROWS, PenteState::COLS]);
-        return t;
+        return a;
     }
 
-    fn legal_actions_mask(&self) -> Tensor<1> {
-        let mut v = [0.0; Self::ACTN_SPC_SIZE];
+    fn legal_actions_mask(&self) -> Vec<f32> {
+        let mut v = vec![0.0; Self::ACTN_SPC_SIZE];
         for i in 0..Self::ACTN_SPC_SIZE{
             if self.is_legal_action(i){
                 v[i] = 1.0;
             }
         }
-        let t = Tensor::from_floats(v, &Default::default());
-        return t;
+        return v;
     }
 
     // Must only call in non-terminal state. 

@@ -12,16 +12,16 @@ type Action = usize;
 // GameState is an abstraction of a 2D board game.
 pub trait GameState: Clone + fmt::Display{
     const ACTN_SPC_SIZE: usize; // Input action space is scalar [0, ACTN_SPC_SIZE).
-    const N_CHAN: usize; // Game can be represented as tensor<3> [[[f32; COLS]; ROWS]; N_CHAN]
+    const N_CHAN: usize; // Game can be represented as flattened tensor [[[f32; COLS]; ROWS]; N_CHAN]
     const ROWS: usize;
     const COLS: usize;
 
     fn new() -> Self;
 
-    fn to_tensor(&self) -> Tensor<3>; // consider making vec to make library agnostic
+    fn to_tensor(&self) -> Vec<f32>; // flattened N_CHAN x ROWS x COLS
 
-    // usize tensor of 0's and 1's. 0=illegal. 1=legal
-    fn legal_actions_mask(&self) -> Tensor<1>;
+    // usize tensor of 0's and 1's. 0.0=illegal. 1.0=legal
+    fn legal_actions_mask(&self) -> Vec<f32>;
 
     // Generate a random legal action (sampled uniformly)
     // Must only be called in non-terminal state.
@@ -62,10 +62,15 @@ pub fn run_self_play <G: GameState>(
         debug!("MCTS posterior logits:{:?}", mcts_post);
         let mcts_tens_d = TensorData::new(mcts_post, [G::ACTN_SPC_SIZE]);
         let mcts_tens = Tensor::from_floats(mcts_tens_d, &device);
-        let action = mcts_tens.clone().exp().categorical(1).into_scalar::<u32>() as usize;
+        let action = mcts_tens.clone()
+                              .exp()
+                              .categorical(1)
+                              .into_scalar::<u32>() as usize;
         debug!("Playing action: {}", action);
+        let td = TensorData::new(state.to_tensor(),
+                                 [G::N_CHAN, G::ROWS, G::COLS]);
         let te = TrainingElement{
-            state: state.to_tensor(),
+            state: Tensor::from_data(td, &device),
             mcts_posterior: mcts_tens,
             outcome: Tensor::from_floats([0.0_f32], &device)
         };
@@ -98,9 +103,10 @@ pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f3
 }
 
 // Performs a single MCTS simulation using PUCT
-fn mcts_sim(
+fn mcts_sim <G:GameState>
+(
     tree: &mut MctsTree,
-    state_orig: &impl GameState,
+    state_orig: &G,
     t: &tard::Tard
 ){
     let mut state = state_orig.clone();
@@ -289,27 +295,38 @@ impl MctsTree{
                 // polarity determines if we are minimizing or maximizing player
                 polarity * node.value / (node.visits as f32)
             };
-        let exploration_term = self.c_puct * node.prior * (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
+        let exploration_term = self.c_puct * node.prior *
+                              (parent.visits as f32).sqrt() / ((1 + node.visits) as f32);
         return exploitation_term + exploration_term;
     }
     
 
     // Only call on non-terminal states. Caling on terminal state is UB.
     // Returns the value of the node
-    fn expand(&mut self, node_id:NodeId, state: &impl GameState, t: &tard::Tard) -> f32{
+    fn expand <G:GameState>(&mut self,
+        node_id:NodeId,
+        state: &G,
+        t: &tard::Tard
+    ) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);
-        let state_tens = state.to_tensor();
+        let device = t.devices()
+                  .into_iter()
+                  .next()
+                  .expect("Expected at least one device");
+        let state_tens_data = TensorData::new(state.to_tensor(),
+                                 [G::N_CHAN, G::ROWS, G::COLS]);
+        let state_tens = Tensor::<3>::from_data(state_tens_data, &device);
         let in_tens = Tensor::stack(vec![state_tens], 0);  // Make a batchsize of 1
         let (p_batch, v_batch) = t.forward(in_tens);
-        let p = p_batch.flatten(0, -1);
-        let v = v_batch.flatten::<1>(0, -1);
+        let p: Tensor<1> = p_batch.flatten(0, -1); // debatch
+        let v = v_batch.flatten::<1>(0, -1); // debatch
         let val = v.into_scalar::<f32>();
-        let legal_p = legalize_policy_tensor(&p, state);  
-        let legal_p_vec = legal_p.exp().into_data().try_to_vec().unwrap();              
-        for action in 0..legal_p_vec.len(){
-            if legal_p_vec[action] > 0.0{   // Only add legal actions.
-                self.add_child(action, node_id, legal_p_vec[action]);
+        let probs:Vec<f32> = p.exp().into_data().try_into_vec().unwrap();
+        let legal_probs = legalize_policy(probs, state);
+        for action in 0..legal_probs.len(){
+            if legal_probs[action] > 0.0{   // Only add legal actions.
+                self.add_child(action, node_id, legal_probs[action]);
             }
         }
         return val;
@@ -344,15 +361,27 @@ impl MctsTree{
     }
 }
 
-// p is log probability
-// Output Tensor is log probability
-fn legalize_policy_tensor(p: &Tensor<1>, state: &impl GameState) -> Tensor<1>{
+// p is probability vector
+// Output is probability vector
+fn legalize_policy(mut p: Vec<f32>, state: &impl GameState) -> Vec<f32>{
     let legal_mask = state.legal_actions_mask();
-    let mut legalized = p.clone() + (legal_mask - 1) * 1e9;  // Makes log probabilities extremely negative so softmax results in probability 0.
-    legalized = log_softmax(legalized.clone(), 0);
-    return legalized;
+    for i in 0..p.len(){
+        if legal_mask[i] == 0.0{
+            p[i] = 0.0;
+        }
+    }
+    return normalize(p);
 }
 
+// normalizes probability vector to 1.0.
+// Assumes sim is non-zero and that each element >=0
+fn normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let sum:f32 = v.iter().sum();
+    for e in v.iter_mut(){
+        *e = *e/sum;
+    }
+    return v;
+}
 
 // p is potentailly unormalized log probabilities.
 // Returns the sum(exp(p));
