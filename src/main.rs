@@ -8,11 +8,13 @@ use burn::tensor::{Tensor, Device};
 use burn::optim::{Adam, AdamConfig, GradientsParams};
 
 mod tard;
+mod gamestate;
+mod evaluator;
 mod engine;
 mod pente;
 
+use crate::gamestate::GameState;
 use pente::PenteState;
-use engine::GameState;
 ////////////////////////////////////////
 //       ### Thread A, (one thread) ####
 //   1) Sample training data from replay buffer

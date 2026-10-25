@@ -2,7 +2,7 @@ use std::{fmt};
 use tracing::{trace, debug, info};
 use rand::prelude::*;
 
-use crate::engine::GameState;
+use crate::gamestate::GameState;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

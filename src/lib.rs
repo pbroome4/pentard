@@ -1,3 +1,5 @@
 pub mod pente;
 pub mod tard;
 pub mod engine;
+pub mod gamestate;
+pub mod evaluator;

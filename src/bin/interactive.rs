@@ -7,6 +7,7 @@ use tracing_subscriber;
 use clap::Parser;
 
 use pentard::pente::*;
+use pentard::gamestate::*;
 use pentard::engine::*;
 
 #[derive(Parser, Debug)]
