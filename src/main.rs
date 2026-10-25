@@ -1,9 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::io::{self, Write};
-use burn::backend::autodiff::checkpoint::base;
 use burn::module::Module;
-use burn::nn::loss;
 use tracing::{Level, debug, info};
 use tracing_subscriber;
 use burn::tensor::{Tensor, Device};
@@ -56,13 +54,14 @@ fn train_tard(){
         PenteState::ACTN_SPC_SIZE,
         &device);
     debug!("{}", tard);
+    let mut t_loss: tard::TardLoss = Default::default();
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::<10000>::new();
-    let om = OutputManager::new("output").unwrap();
+    let om = OutputManager::new("output", false).unwrap();
 
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
-    let training_size = 256;
+    let training_size = 64;
     let n_rollouts = 400;
     info!("Training batch size {}", training_size);
     loop{
@@ -80,9 +79,9 @@ fn train_tard(){
         for i in 0..20{     // training thread
             info!("Commencing training iteration {}", trn_iter_n);
             let trn_sample = trn_buf.sample(training_size);
-            let loss = tard::compute_loss(&tard, &trn_sample);
-            info!("Loss: {}", loss);
-            let grads = loss.backward();
+            t_loss = tard::compute_loss(&tard, &trn_sample);
+            info!("{}", t_loss);
+            let grads = t_loss.loss.backward();
             let grad_params = GradientsParams::from_grads(grads, &tard);
             tard = opt.step(1e-4, tard, grad_params);
             trn_iter_n += 1;
@@ -93,6 +92,20 @@ fn train_tard(){
             let model_name = format!("model_{}", trn_iter_n);
             tard.clone().save_file(om.model_d.join(model_name))
                         .expect("Unable to save model");
+            info!("Saving loss");
+            let mut lf = OpenOptions::new()
+                                  .write(true)
+                                  .append(true)
+                                  .open(&om.loss_f).unwrap();
+            writeln!(lf,
+                     "{}, {}, {}",
+                     t_loss.loss.clone()
+                                .into_scalar::<f32>(),
+                     t_loss.cross_entropy_loss.clone()
+                                              .into_scalar::<f32>(),
+                     t_loss.mse_loss.clone()
+                                    .into_scalar::<f32>(),
+                    ).unwrap();
         }
     }
 }
@@ -111,15 +124,17 @@ impl OutputManager{
         let loss_f = basepath_d.join("loss.csv");
 
         if append == false{
+            info!("Deleting directory {}", basepath_d.display());
             fs::remove_dir_all(&basepath_d)?;
         }
+        info!("Creating directory {}", basepath_d.display());
         fs::create_dir_all(&basepath_d)?;
         fs::create_dir_all(&model_d)?;
-        let mut lf_opt = OpenOptions::new().create(true)
+        let mut lf = OpenOptions::new().create(true)
                                   .append(true)
                                   .write(true)
                                   .open(&loss_f)?;
-        l.write(b"loss, cross_entropy_loss, mse_loss\n")?;
+        lf.write(b"loss, cross_entropy_loss, mse_loss\n")?;
 
         let s = Self {
             basepath_d: basepath_d,

@@ -4,7 +4,6 @@ use burn::nn::{BatchNorm, BatchNormConfig, Linear, LinearConfig};
 use burn::tensor::Device;
 use burn::tensor::activation::{relu, tanh, log_softmax};
 use tracing::{trace, debug, info};
-use arraydeque::ArrayDeque;
 use std::collections::VecDeque;
 use rand::RngExt;
 
@@ -147,8 +146,33 @@ impl TrainingBatch{
     }
 }
 
+#[derive(Debug)]
+pub struct TardLoss{
+    pub loss: Tensor<1>,
+    pub cross_entropy_loss: Tensor<1>,
+    pub mse_loss: Tensor<1>
+}
 
-pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor<1>{
+impl std::fmt::Display for TardLoss{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Loss: {}", self.loss.to_data())?;
+        writeln!(f, "\tcross_entropy_loss: {}", self.cross_entropy_loss.to_data())?;
+        writeln!(f, "\tmse_loss: {}", self.mse_loss.to_data())?;
+        return Ok(());
+    }
+}
+
+impl Default for TardLoss{
+    fn default() -> Self {
+        return Self {
+            loss: Tensor::from_floats([0.0], &Default::default()),
+            cross_entropy_loss: Tensor::from_floats([0.0], &Default::default()),
+            mse_loss: Tensor::from_floats([0.0], &Default::default())
+        }
+    }
+}
+
+pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
     let mut batch = TrainingBatch::from_training_elements(v);
     batch.state = batch.state.autodiff().require_grad();
     batch.mcts_posterior = batch.mcts_posterior.autodiff().require_grad();
@@ -166,9 +190,8 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> Tensor<1>{
     let mse_loss = (tard_value_batch - batch.outcome).powf_scalar(2.0)
                                                      .mean();
     
-    info!("CrossEntropyLoss: {}   MseLoss: {}", cross_entropy_loss, mse_loss);
-    let loss = cross_entropy_loss + mse_loss;
-    return loss;
+    let loss = cross_entropy_loss.clone() + mse_loss.clone();
+    return TardLoss{loss, cross_entropy_loss, mse_loss};
 }
 
 
@@ -206,4 +229,7 @@ impl<const CAP: usize> TrainingBuffer<CAP> {
         return self.memory_.len();
     }
 }
+
+
+
 
