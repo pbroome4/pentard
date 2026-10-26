@@ -12,8 +12,8 @@ use crate::gamestate::{GameState, Action};
 use crate::evaluator::*;
 
 
-pub fn run_self_play <G: GameState, E: Evaluator<G>>(
-    eval: &mut E,
+pub fn run_self_play <G: GameState>(
+    eval: &mut impl Evaluator<G>,
     num_sims: u32,
 ) -> Vec<SelfPlayElement<G>>{
     debug!("Running self play");
@@ -64,9 +64,9 @@ pub struct SelfPlayElement<G:GameState>{
 
 // Run MCTS from the current state. State must be non-terminal. num sims >= 1.
 // Returns log probabiltiy posterior.
-pub fn mcts <G: GameState, E:Evaluator<G>> (
+pub fn mcts <G: GameState> (
     state: &G,
-    eval: &mut E,
+    eval: &mut impl Evaluator<G>,
     num_sims: u32
 ) -> (Vec<f32>, Vec<f32>){
     // Run mcts and return the evaluated mcts policy
@@ -83,11 +83,11 @@ pub fn mcts <G: GameState, E:Evaluator<G>> (
 }
 
 // Performs a single MCTS simulation using PUCT
-fn mcts_sim <G:GameState, E:Evaluator<G>>
+fn mcts_sim <G:GameState>
 (
     tree: &mut MctsTree,
     state_orig: &G,
-    eval: &mut E
+    eval: &mut impl Evaluator<G>
 ){
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
@@ -283,10 +283,11 @@ impl MctsTree{
 
     // Only call on non-terminal states. Caling on terminal state is UB.
     // Returns the value of the node
-    fn expand <G:GameState, E: Evaluator<G>>(&mut self,
+    fn expand <G:GameState>(
+        &mut self,
         node_id:NodeId,
         state: &G,
-        eval: &mut E
+        eval: &mut impl Evaluator<G>
     ) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);
