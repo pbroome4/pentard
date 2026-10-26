@@ -6,7 +6,6 @@ use burn::tensor::activation::{relu, tanh, log_softmax};
 use tracing::{trace, debug, info};
 use core::fmt;
 use std::collections::VecDeque;
-use std::fmt::write;
 use rand::RngExt;
 
 use crate::tard;

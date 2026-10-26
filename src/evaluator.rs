@@ -1,8 +1,11 @@
 
-use std::thread;
-use burn::tensor::{Tensor, TensorData};
+use std::collections::VecDeque;
+use std::io::ErrorKind::TimedOut;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
-use crossbeam::channel::{Sender};
+use crossbeam::channel::{Receiver, RecvError, RecvTimeoutError, Sender};
 use tracing::{trace, debug, info};
 
 use crate::gamestate::*;
@@ -66,7 +69,7 @@ struct BatchedEvalResponse{
 #[derive(Debug)]
 struct BatchedEvalRequest<G: GameState>{
     g: G,
-    resp_chan: Sender<BatchedEvalResponse>    // one-shot respone channel
+    resp_chan: Sender<BatchedEvalResponse>    // one-shot response channel
 }
 
 
@@ -74,10 +77,9 @@ struct BatchedEvalRequest<G: GameState>{
 // Evaluations require synchronization with device (possibly gpu). 
 // To reduce synchronization overhead, we prefer to batch Tard eval requests.
 // This struct uses crossbeam channels to add evaluation requests to a common
-// queue and return individual evaluation result.
+// queue and return individual evaluation results.
 #[derive(Clone)]
 pub struct BatchedTardEvaluator <G:GameState>{
-    t: Tard,
     s: Sender<BatchedEvalRequest<G>>
 } 
 
@@ -85,21 +87,8 @@ pub struct BatchedTardEvaluator <G:GameState>{
 impl <G: GameState + Send + 'static> BatchedTardEvaluator<G>{
     pub fn new(t: &Tard)->Self{
         let (snd, rcv) = crossbeam::channel::unbounded::<BatchedEvalRequest<G>>();
-        thread::spawn(move ||{  // Will run as long as there is a sender
-            info!("BatchedTardEvaluator reciever thread starting");
-            while let Ok(req) = rcv.recv(){  // TODO implement batching
-                let p = vec![1.0; G::ACTN_SPC_SIZE];
-                let p = legalize_policy(p, &req.g);
-                let b = BatchedEvalResponse{
-                    p: p,
-                    v: 0.0
-                };
-                req.resp_chan.send(b).unwrap();
-            }
-            info!("BatchedTardEvaluator receiver thread shutting down");
-        });
+        start_bte_recieve_thread(rcv, t.valid());
         let s = Self{
-            t: t.valid(),
             s: snd,
         };
         return s;
@@ -110,10 +99,6 @@ impl <G: GameState + Send + 'static> BatchedTardEvaluator<G>{
 impl <G:GameState> Evaluator<G> for BatchedTardEvaluator<G>{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
         let (s,r) = crossbeam::channel::bounded::<BatchedEvalResponse>(1); // one-shot channel
-        let device = self.t.devices()
-                  .into_iter()
-                  .next()
-                  .expect("Expected at least one device");
         let req = BatchedEvalRequest{
             g: g.clone(),
             resp_chan: s,
@@ -124,7 +109,119 @@ impl <G:GameState> Evaluator<G> for BatchedTardEvaluator<G>{
     }  
 }
 
+fn start_bte_recieve_thread<G: GameState + Send + 'static> (
+    r: Receiver<BatchedEvalRequest<G>>,
+    t: Tard) -> JoinHandle<()>
+{
+    thread::spawn(move ||{  // Will run as long as there is a sender
+        debug!("BatchedTardEvaluator reciever thread starting");
+        let device = t.devices()
+                  .into_iter()
+                  .next()
+                  .expect("Expected at least one device");
+        let mut q = VecDeque::<BatchedEvalRequest<G>>::new();
+        let mut is_connected = true;
+        const BATCH_SIZE: usize = 32;
+        while is_connected{
+            let batch_timeout = Duration::from_micros(10);
+            let (n, recv_connected) = read_batch(&r, &mut q, BATCH_SIZE, batch_timeout);
+            trace!("Batch read n: {} elements. is_connected: {}", n, recv_connected);
+            is_connected = recv_connected;
+            if q.len() > 0{
+                let b_tens = batch_eval_tensor(&q, &device);
+                let (p_batch, v_batch) = t.forward(b_tens);
+                for i in 0..q.len(){
+                    let p = p_batch.clone()
+                                    .select_dim::<1>(0, i)
+                                    .into_data()
+                                    .try_into_vec::<f32>()
+                                    .unwrap();
+                    let v = v_batch.clone()
+                                    .select_dim::<1>(0, i)
+                                    .into_scalar::<f32>();
+                    let p = legalize_policy(p, &q[i].g);
+                    let resp = BatchedEvalResponse{
+                        p: p,
+                        v: v,
+                    };
+                    q[i].resp_chan.send(resp).unwrap();
+                }
+                q.clear();
+            }
+        }
+        debug!("BatchedTardEvaluator receiver thread shutting down");
+    })
+}
 
+
+fn batch_eval_tensor <G:GameState>(
+    q: &VecDeque<BatchedEvalRequest<G>>,
+    device: &Device
+) -> Tensor<4>{
+    let batch_size = q.len();
+    let mut b_vec: Vec<Tensor<3>> = Vec::with_capacity(batch_size);
+    for i in 0..batch_size{
+        let req = &q[i];
+        let td = TensorData::new(req.g.to_tensor(),
+                                 [G::N_CHAN, G::ROWS, G::COLS]);
+        let t = Tensor::<3>::from_data(td, device);
+        b_vec.push(t);
+    }
+    let b_tens: Tensor<4> = Tensor::stack(b_vec, 0);
+    return b_tens;
+}
+
+
+// Blocking read requests off reciever into a queue.
+// Blocking stops if any of these conditions is met:
+//  1) length of the queue is/becomes >= batch_size
+//  2) Timer exceeds timeout. Timer starts when len queue > 0.
+//  3) receiver throws error (ex: disconnected)
+// Returns 
+//      Number of elements read into queue.
+//      is_connected
+fn read_batch<G:GameState>(
+    r: &Receiver<BatchedEvalRequest<G>>,
+    q: &mut VecDeque<BatchedEvalRequest<G>>,
+    batch_size:usize,
+    timeout: Duration) -> (usize, bool)
+{
+    let n = q.len();
+    let mut is_connected = true;
+    // Empty queue can just block read because no other requests are waiting
+    if q.len() == 0{
+        trace!("Queue is empty, performing blocking read"); 
+        match r.recv(){
+            Ok(req) => {
+                q.push_back(req);
+            }
+            Err(x) => { // disconnected
+                return (0, false);
+            }
+        }
+    } // q.len() > 0, start timer
+    let deadline = Instant::now() + timeout;
+    while q.len() < batch_size{
+        let now = Instant::now();
+        if now > deadline{
+            break;
+        }
+        let rx_timeout = deadline - now;
+        match r.recv_timeout(rx_timeout) {
+            Ok(req) => {
+                q.push_back(req);
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                break;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                is_connected = false;
+                break;
+            } 
+        } 
+    }
+    return (q.len() - n, is_connected);
+}
 
 // p is probability vector
 // Output is probability vector
