@@ -5,8 +5,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
-use crossbeam::channel::{Receiver, RecvError, RecvTimeoutError, Sender};
-use tracing::{trace, debug, info};
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
+use tracing::{trace, debug, info, warn};
 
 use crate::gamestate::*;
 use crate::tard::*;
@@ -15,11 +15,12 @@ use crate::tard::*;
 // returns dual head output
 // vector is probability (NOT log) distribution over legal moves
 // f32 is scalar score of current position
-pub trait Evaluator <G: GameState>{
+pub trait Evaluator <G: GameState>: Clone + Send + 'static{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32);
 }
 
 // Always returns uniform probability over legal moves and 0.0 score.
+#[derive(Clone)]
 pub struct NullEvaluator{}
 
 impl <G:GameState> Evaluator<G> for NullEvaluator{
@@ -30,6 +31,7 @@ impl <G:GameState> Evaluator<G> for NullEvaluator{
 }
 
 // Runs input state through Tard and returns dual head output
+#[derive(Clone)]
 pub struct TardEvaluator{
     t: Tard
 }
@@ -80,18 +82,26 @@ struct BatchedEvalRequest<G: GameState>{
 // queue and return individual evaluation results.
 #[derive(Clone)]
 pub struct BatchedTardEvaluator <G:GameState>{
-    s: Sender<BatchedEvalRequest<G>>
+    s_eval: Sender<BatchedEvalRequest<G>>, // Channel to send batched requests to
+    s_tard: Sender<Tard> // Channel to send updated Models
 } 
 
 
-impl <G: GameState + Send + 'static> BatchedTardEvaluator<G>{
-    pub fn new(t: &Tard)->Self{
-        let (snd, rcv) = crossbeam::channel::unbounded::<BatchedEvalRequest<G>>();
-        start_bte_recieve_thread(rcv, t.valid());
+impl <G: GameState> BatchedTardEvaluator<G>{
+    pub fn new()->Self{
+        let (s_eval, r_eval) = crossbeam::channel::unbounded::<BatchedEvalRequest<G>>();
+        let (s_tard, r_tard) = crossbeam::channel::unbounded::<Tard>();
+        start_bte_recieve_thread(r_eval, r_tard);
         let s = Self{
-            s: snd,
+            s_eval: s_eval,
+            s_tard: s_tard
         };
         return s;
+    }
+    
+    pub fn init(self, t:Tard) -> Self{
+        self.s_tard.send(t).unwrap();
+        return self;
     }
 }
 
@@ -103,30 +113,41 @@ impl <G:GameState> Evaluator<G> for BatchedTardEvaluator<G>{
             g: g.clone(),
             resp_chan: s,
         };
-        self.s.send(req).unwrap();
+        self.s_eval.send(req).unwrap();
         let resp = r.recv().unwrap(); // blocking to revieve response
         return (resp.p, resp.v);
     }  
 }
 
-fn start_bte_recieve_thread<G: GameState + Send + 'static> (
-    r: Receiver<BatchedEvalRequest<G>>,
-    t: Tard) -> JoinHandle<()>
+fn start_bte_recieve_thread<G: GameState> (
+    r_eval: Receiver<BatchedEvalRequest<G>>,
+    r_tard: Receiver<Tard>) -> JoinHandle<()>
 {
     thread::spawn(move ||{  // Will run as long as there is a sender
-        debug!("BatchedTardEvaluator reciever thread starting");
-        let device = t.devices()
-                  .into_iter()
-                  .next()
-                  .expect("Expected at least one device");
-        let mut q = VecDeque::<BatchedEvalRequest<G>>::new();
-        let mut is_connected = true;
+        debug!("BTE reciever thread starting");
+        debug!("BTE awaiting Tard");
+        let mut is_running = true;
+        let Ok(mut t) = r_tard.recv() else {
+            debug!("BTE tard receive channel closed ... killing BTE thread");
+            return;
+        };
+        debug!("BTE recieved Tard");
         const BATCH_SIZE: usize = 32;
-        while is_connected{
+        let mut q = VecDeque::<BatchedEvalRequest<G>>::new();
+        while is_running{
+            // Check for model updates
+            let (t_updated, recv_connected) = check_for_model_update(r_tard.clone(), t);
+            t = t_updated;
+            is_running &= recv_connected;
+            let device = t.devices()
+                          .into_iter()
+                          .next()
+                          .expect("Expected at least one device");
+            
+            // Perform batch requests
             let batch_timeout = Duration::from_micros(10);
-            let (n, recv_connected) = read_batch(&r, &mut q, BATCH_SIZE, batch_timeout);
-            trace!("Batch read n: {} elements. is_connected: {}", n, recv_connected);
-            is_connected = recv_connected;
+            let (n, recv_connected) = read_batch(&r_eval, &mut q, BATCH_SIZE, batch_timeout);
+            is_running &= recv_connected;
             if q.len() > 0{
                 let b_tens = batch_eval_tensor(&q, &device);
                 let (p_batch, v_batch) = t.forward(b_tens);
@@ -144,15 +165,42 @@ fn start_bte_recieve_thread<G: GameState + Send + 'static> (
                         p: p,
                         v: v,
                     };
-                    q[i].resp_chan.send(resp).unwrap();
+                    match q[i].resp_chan.send(resp) {
+                        Ok(()) => {}
+                        Err(x) => {
+                            warn!("BTE eval response failed to send: {}", x);
+                        }
+                    }
                 }
                 q.clear();
             }
         }
-        debug!("BatchedTardEvaluator receiver thread shutting down");
+        debug!("BatchedTardEvaluator receiver thread end");
     })
 }
 
+
+fn check_for_model_update(r_tard: Receiver<Tard>, t_in: Tard) -> (Tard, bool){
+    let mut is_connected = true;
+    let mut t = t_in;
+    loop{
+        match r_tard.try_recv(){
+            Ok(t_updated) => {
+                debug!("BTE updating model");
+                t = t_updated;
+            }
+            Err(TryRecvError::Empty) => {
+                break; // nothing to update
+            }
+            Err(TryRecvError::Disconnected) => {
+                debug!("BTE tard receive channel closed ... signaling terminate for BTE thread");
+                is_connected = false;
+                break;
+            }
+        }
+    }
+    return (t, is_connected);
+}
 
 fn batch_eval_tensor <G:GameState>(
     q: &VecDeque<BatchedEvalRequest<G>>,

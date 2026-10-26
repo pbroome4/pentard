@@ -240,14 +240,14 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
 }
 
 
-pub struct TrainingBuffer<const CAP: usize>{
+pub struct TrainingBuffer{
     memory_: VecDeque<TrainingElement>,
 }
 
-impl<const CAP: usize> TrainingBuffer<CAP> {
-    pub fn new() -> Self {
+impl TrainingBuffer {
+    pub fn new(capacity: usize) -> Self {
         return Self{
-            memory_: VecDeque::<TrainingElement>::with_capacity(CAP),
+            memory_: VecDeque::<TrainingElement>::with_capacity(capacity),
         };
     }
 

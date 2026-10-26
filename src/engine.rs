@@ -13,8 +13,8 @@ use crate::evaluator::*;
 
 
 pub fn run_self_play <G: GameState>(
-    eval: &mut impl Evaluator<G>,
-    num_sims: u32,
+    eval: impl Evaluator<G>,
+    num_sims: usize,
 ) -> Vec<SelfPlayElement<G>>{
     debug!("Running self play");
     let mut sp_vec = Vec::new();
@@ -23,7 +23,7 @@ pub fn run_self_play <G: GameState>(
     while !g.is_terminal(){
         debug!("Current State: \n{}", g);
         debug!("Computing self-play move#: {}", move_n);
-        let (mcts_pri, mcts_post) = mcts(&g, eval, num_sims);
+        let (mcts_pri, mcts_post) = mcts(&g, eval.clone(), num_sims);
         debug!("MCTS prior logits: {:?}", &mcts_pri);
         debug!("MCTS posterior logits:{:?}", &mcts_post);
         let mcts_prob = exp(&mcts_post);
@@ -66,13 +66,13 @@ pub struct SelfPlayElement<G:GameState>{
 // Returns log probabiltiy posterior.
 pub fn mcts <G: GameState> (
     state: &G,
-    eval: &mut impl Evaluator<G>,
-    num_sims: u32
+    eval: impl Evaluator<G>,
+    num_sims: usize
 ) -> (Vec<f32>, Vec<f32>){
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new(1.0);
     for _ in 0..num_sims{
-        mcts_sim(&mut tree, state, eval);
+        mcts_sim(&mut tree, state, eval.clone());
     }
     let root = tree.get(0).unwrap();
     debug!("Mcts root node: {}", root);
@@ -87,7 +87,7 @@ fn mcts_sim <G:GameState>
 (
     tree: &mut MctsTree,
     state_orig: &G,
-    eval: &mut impl Evaluator<G>
+    eval: impl Evaluator<G>
 ){
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
@@ -287,7 +287,7 @@ impl MctsTree{
         &mut self,
         node_id:NodeId,
         state: &G,
-        eval: &mut impl Evaluator<G>
+        eval: impl Evaluator<G>
     ) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);

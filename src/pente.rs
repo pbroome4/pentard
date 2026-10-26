@@ -3,6 +3,8 @@ use tracing::{trace, debug, info};
 
 use crate::gamestate::GameState;
 
+pub const ROWS: usize = 9;
+pub const COLS: usize = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -15,7 +17,7 @@ pub enum Piece{
 
 #[derive(Clone, Debug)]
 pub struct PenteState{
-    board_: [[Piece; PenteState::COLS]; PenteState::ROWS],
+    board_: [[Piece; COLS]; ROWS],
     b_caps_: u8, 
     w_caps_: u8,
     is_black_: bool,
@@ -34,10 +36,10 @@ impl Default for PenteState{
 }
 
 impl GameState for PenteState{
-    const ACTN_SPC_SIZE: usize = PenteState::ROWS * PenteState::COLS;
-    const N_CHAN:usize = 4;
-    const ROWS:usize = 9;
-    const COLS:usize = 9;
+    const ACTN_SPC_SIZE: usize = ROWS * COLS;
+    const N_CHAN: usize = 4;
+    const ROWS: usize = ROWS;
+    const COLS: usize = COLS;
     
     // Output (n_chan) x ROWS x COLS Tensor.
     // channel 0 is occupancy mask of current player
