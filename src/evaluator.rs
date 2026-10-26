@@ -1,8 +1,9 @@
-use std::sync::mpsc::channel;
 
-use burn::tensor::{Tensor, Device, TensorData};
+use std::thread;
+use burn::tensor::{Tensor, TensorData};
 use burn::module::Module;
-use crossbeam::channel::{self, Sender};
+use crossbeam::channel::{Sender};
+use tracing::{trace, debug, info};
 
 use crate::gamestate::*;
 use crate::tard::*;
@@ -31,8 +32,8 @@ pub struct TardEvaluator{
 }
 
 impl TardEvaluator{
-    pub fn new(t:Tard)->Self{
-        return Self {t: t};
+    pub fn new(t: &Tard)->Self{
+        return Self {t: t.valid()};
     }
 }
 
@@ -56,12 +57,13 @@ impl <G:GameState> Evaluator<G> for TardEvaluator{
     }
 }
 
-
+#[derive(Debug)]
 struct BatchedEvalResponse{
     p: Vec<f32>,
     v: f32
 }
 
+#[derive(Debug)]
 struct BatchedEvalRequest<G: GameState>{
     g: G,
     resp_chan: Sender<BatchedEvalResponse>    // one-shot respone channel
@@ -73,25 +75,50 @@ struct BatchedEvalRequest<G: GameState>{
 // To reduce synchronization overhead, we prefer to batch Tard eval requests.
 // This struct uses crossbeam channels to add evaluation requests to a common
 // queue and return individual evaluation result.
+#[derive(Clone)]
 pub struct BatchedTardEvaluator <G:GameState>{
     t: Tard,
     s: Sender<BatchedEvalRequest<G>>
 } 
 
+
+impl <G: GameState + Send + 'static> BatchedTardEvaluator<G>{
+    pub fn new(t: &Tard)->Self{
+        let (snd, rcv) = crossbeam::channel::unbounded::<BatchedEvalRequest<G>>();
+        thread::spawn(move ||{  // Will run as long as there is a sender
+            info!("BatchedTardEvaluator reciever thread starting");
+            while let Ok(req) = rcv.recv(){  // TODO implement batching
+                let p = vec![1.0; G::ACTN_SPC_SIZE];
+                let p = legalize_policy(p, &req.g);
+                let b = BatchedEvalResponse{
+                    p: p,
+                    v: 0.0
+                };
+                req.resp_chan.send(b).unwrap();
+            }
+            info!("BatchedTardEvaluator receiver thread shutting down");
+        });
+        let s = Self{
+            t: t.valid(),
+            s: snd,
+        };
+        return s;
+    }
+}
+
+
 impl <G:GameState> Evaluator<G> for BatchedTardEvaluator<G>{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
-        let (s,r) = channel::bounded::<BatchedEvalResponse>(1); // one-shot channel
+        let (s,r) = crossbeam::channel::bounded::<BatchedEvalResponse>(1); // one-shot channel
         let device = self.t.devices()
                   .into_iter()
                   .next()
                   .expect("Expected at least one device");
-        let td = TensorData::new(g.to_tensor(),
-                    [G::N_CHAN, G::ROWS, G::COLS]);
-        let t = Tensor::<3>::from_data(td, &device);
         let req = BatchedEvalRequest{
             g: g.clone(),
             resp_chan: s,
         };
+        self.s.send(req).unwrap();
         let resp = r.recv().unwrap(); // blocking to revieve response
         return (resp.p, resp.v);
     }  

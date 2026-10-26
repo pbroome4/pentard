@@ -76,10 +76,10 @@ fn train_tard(){
     info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;
-        
+        //let mut eval = TardEvaluator::new(&tard);
+        let mut eval = BatchedTardEvaluator::new(&tard);
         while self_play_states_added < 3*training_size{ // self play thread
             info!("Commencing self-play iteration {}", self_play_iter_n);
-            let mut eval = TardEvaluator::new(tard.valid());
             let training_data = engine::run_self_play::<PenteState>(&mut eval, n_rollouts);
             let training_data =  selfplay_to_training(training_data, &device);
             info!("Adding {} training elements to buffer.", training_data.len());
