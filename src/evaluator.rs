@@ -7,18 +7,18 @@ use crossbeam::channel::{self, Sender};
 use crate::gamestate::*;
 use crate::tard::*;
 
-// Takes input state, runs in through network,
+// Takes input state, runs it through network,
 // returns dual head output
-// vector is probability distribution over legal moves
+// vector is probability (NOT log) distribution over legal moves
 // f32 is scalar score of current position
-trait Evaluate <G: GameState>{
+pub trait Evaluator <G: GameState>{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32);
 }
 
 // Always returns uniform probability over legal moves and 0.0 score.
-struct NullEvaluator{}
+pub struct NullEvaluator{}
 
-impl <G:GameState> Evaluate<G> for NullEvaluator{
+impl <G:GameState> Evaluator<G> for NullEvaluator{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
         let p = vec![1.0; G::ACTN_SPC_SIZE];
         return (legalize_policy(p, g), 0.0);
@@ -26,11 +26,17 @@ impl <G:GameState> Evaluate<G> for NullEvaluator{
 }
 
 // Runs input state through Tard and returns dual head output
-struct TardEvaluator{
+pub struct TardEvaluator{
     t: Tard
 }
 
-impl <G:GameState> Evaluate<G> for TardEvaluator{
+impl TardEvaluator{
+    pub fn new(t:Tard)->Self{
+        return Self {t: t};
+    }
+}
+
+impl <G:GameState> Evaluator<G> for TardEvaluator{
     fn evaluate (&self, g:&G) -> (Vec<f32>, f32) {
         let device = self.t.devices()
                   .into_iter()
@@ -67,12 +73,12 @@ struct BatchedEvalRequest<G: GameState>{
 // To reduce synchronization overhead, we prefer to batch Tard eval requests.
 // This struct uses crossbeam channels to add evaluation requests to a common
 // queue and return individual evaluation result.
-struct BatchedTardEvaluator <G:GameState>{
+pub struct BatchedTardEvaluator <G:GameState>{
     t: Tard,
     s: Sender<BatchedEvalRequest<G>>
 } 
 
-impl <G:GameState> Evaluate<G> for BatchedTardEvaluator<G>{
+impl <G:GameState> Evaluator<G> for BatchedTardEvaluator<G>{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
         let (s,r) = channel::bounded::<BatchedEvalResponse>(1); // one-shot channel
         let device = self.t.devices()

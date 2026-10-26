@@ -1,6 +1,5 @@
 use std::{fmt};
 use tracing::{trace, debug, info};
-use rand::prelude::*;
 
 use crate::gamestate::GameState;
 
@@ -28,16 +27,18 @@ pub struct PenteState{
                          // Sentinel is draw.
 }
 
+impl Default for PenteState{
+    fn default() -> Self {
+        return Self::new();
+    }
+}
+
 impl GameState for PenteState{
     const ACTN_SPC_SIZE: usize = PenteState::ROWS * PenteState::COLS;
     const N_CHAN:usize = 4;
     const ROWS:usize = 9;
     const COLS:usize = 9;
     
-    fn new() -> Self{
-        return PenteState::new();
-    }
-
     // Output (n_chan) x ROWS x COLS Tensor.
     // channel 0 is occupancy mask of current player
     // channel 1 is captures of current player
@@ -161,7 +162,7 @@ impl PenteState{
     // If current player played at row,col, would it be connect-5
     fn is_con5(&self, row: usize, col: usize) -> bool{
         let active = self.get_active_piece();
-        let mut count:u32 = 1; // Vertical
+        let mut count:u32;
         let r = row as i32;
         let c = col as i32;
         const DIRS: [(i32, i32); 4] = [

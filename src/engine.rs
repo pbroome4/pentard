@@ -12,22 +12,18 @@ use crate::gamestate::{GameState, Action};
 use crate::evaluator::*;
 
 
-pub fn run_self_play <G: GameState>(
-    t: &tard::Tard,
+pub fn run_self_play <G: GameState, E: Evaluator<G>>(
+    eval: &mut E,
     num_sims: u32,
-) -> Vec<tard::TrainingElement>{
+) -> Vec<SelfPlayElement<G>>{
     debug!("Running self play");
-    let device = t.devices()
-                  .into_iter()
-                  .next()
-                  .expect("Expected at least one device");
     let mut sp_vec = Vec::new();
-    let mut g = G::new();
+    let mut g = G::default(); 
     let mut move_n = 0;
     while !g.is_terminal(){
         debug!("Current State: \n{}", g);
         debug!("Computing self-play move#: {}", move_n);
-        let (mcts_pri, mcts_post) = mcts(&g, t, num_sims);
+        let (mcts_pri, mcts_post) = mcts(&g, eval, num_sims);
         debug!("MCTS prior logits: {:?}", &mcts_pri);
         debug!("MCTS posterior logits:{:?}", &mcts_post);
         let mcts_prob = exp(&mcts_post);
@@ -55,44 +51,28 @@ pub fn run_self_play <G: GameState>(
         polarity *= -1.0;
     }
     trace!("{:?}", &sp_vec);
-    let te_vec =  selfplay_to_training(sp_vec, &device);
-    return te_vec;
+    return sp_vec;
 }
 
 #[derive(Debug)]
-struct SelfPlayElement<G:GameState>{
-    g: G,
-    mcts_post: Vec<f32>,
-    outcome: f32
-}
-
-fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>, device: &Device) -> Vec<TrainingElement>{
-    let mut te_vec = Vec::with_capacity(sp_vec.len());
-    for spe in sp_vec.into_iter(){
-        let state_td = TensorData::new(spe.g.to_tensor(),
-                                   [G::N_CHAN, G::ROWS, G::COLS]);
-        let state = Tensor::from_data(state_td, device);
-        let mcts_td = TensorData::new(spe.mcts_post, [G::ACTN_SPC_SIZE]);
-        let mcts_post = Tensor::from_data(mcts_td, device);
-        let outcome = Tensor::from_floats([spe.outcome], device);
-        let te = TrainingElement{
-            state: state,
-            mcts_posterior: mcts_post,
-            outcome: outcome
-        };
-        te_vec.push(te);
-    }
-    return te_vec;
+pub struct SelfPlayElement<G:GameState>{
+    pub g: G,
+    pub mcts_post: Vec<f32>,
+    pub outcome: f32
 }
 
 
 // Run MCTS from the current state. State must be non-terminal. num sims >= 1.
 // Returns log probabiltiy posterior.
-pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f32>, Vec<f32>){
+pub fn mcts <G: GameState, E:Evaluator<G>> (
+    state: &G,
+    eval: &mut E,
+    num_sims: u32
+) -> (Vec<f32>, Vec<f32>){
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new(1.0);
     for _ in 0..num_sims{
-        mcts_sim(&mut tree, state, t);
+        mcts_sim(&mut tree, state, eval);
     }
     let root = tree.get(0).unwrap();
     debug!("Mcts root node: {}", root);
@@ -103,11 +83,11 @@ pub fn mcts <G: GameState> (state: &G, t: &tard::Tard, num_sims: u32) -> (Vec<f3
 }
 
 // Performs a single MCTS simulation using PUCT
-fn mcts_sim <G:GameState>
+fn mcts_sim <G:GameState, E:Evaluator<G>>
 (
     tree: &mut MctsTree,
     state_orig: &G,
-    t: &tard::Tard
+    eval: &mut E
 ){
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
@@ -126,7 +106,7 @@ fn mcts_sim <G:GameState>
         if state.is_terminal(){
             state.get_terminal_value() as f32
         }else{
-            tree.expand(node_id, &state, t)
+            tree.expand(node_id, &state, eval)
         };
     tree.back_propogate(node_id, value); 
 }
@@ -303,33 +283,20 @@ impl MctsTree{
 
     // Only call on non-terminal states. Caling on terminal state is UB.
     // Returns the value of the node
-    fn expand <G:GameState>(&mut self,
+    fn expand <G:GameState, E: Evaluator<G>>(&mut self,
         node_id:NodeId,
         state: &G,
-        t: &tard::Tard
+        eval: &mut E
     ) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);
-        let device = t.devices()
-                  .into_iter()
-                  .next()
-                  .expect("Expected at least one device");
-        let state_tens_data = TensorData::new(state.to_tensor(),
-                                 [G::N_CHAN, G::ROWS, G::COLS]);
-        let state_tens = Tensor::<3>::from_data(state_tens_data, &device);
-        let in_tens = Tensor::stack(vec![state_tens], 0);  // Make a batchsize of 1
-        let (p_batch, v_batch) = t.forward(in_tens);
-        let p: Tensor<1> = p_batch.flatten(0, -1); // debatch
-        let v = v_batch.flatten::<1>(0, -1); // debatch
-        let val = v.into_scalar::<f32>();
-        let probs:Vec<f32> = p.exp().into_data().try_into_vec().unwrap();
-        let legal_probs = legalize_policy(probs, state);
-        for action in 0..legal_probs.len(){
-            if legal_probs[action] > 0.0{   // Only add legal actions.
-                self.add_child(action, node_id, legal_probs[action]);
+        let (p, v) = eval.evaluate(state);
+        for action in 0..p.len(){
+            if p[action] > 0.0{   // Only add legal actions.
+                self.add_child(action, node_id, p[action]);
             }
         }
-        return val;
+        return v;
     }
 
     // Create a new node in the arena-pool. Return it's id.
@@ -350,38 +317,8 @@ impl MctsTree{
         return child_id;
     }
 
-    fn depth(&self, node_id:NodeId) -> usize {
-        let mut count = 0;
-        let mut curr_id = node_id;
-        while let Some(next_id) = self.get(curr_id).unwrap().parent{
-            curr_id = next_id;
-            count += 1;
-        } 
-        return count;
-    }
 }
 
-// p is probability vector
-// Output is probability vector
-fn legalize_policy(mut p: Vec<f32>, state: &impl GameState) -> Vec<f32>{
-    let legal_mask = state.legal_actions_mask();
-    for i in 0..p.len(){
-        if legal_mask[i] == 0.0{
-            p[i] = 0.0;
-        }
-    }
-    return normalize(p);
-}
-
-// normalizes probability vector to 1.0.
-// Assumes sim is non-zero and that each element >=0
-fn normalize(mut v: Vec<f32>) -> Vec<f32> {
-    let sum:f32 = v.iter().sum();
-    for e in v.iter_mut(){
-        *e = *e/sum;
-    }
-    return v;
-}
 
 // p is (potentailly unormalized) log probabilities.
 // Returns the sum(exp(p));

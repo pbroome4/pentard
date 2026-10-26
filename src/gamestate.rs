@@ -3,13 +3,11 @@ use std::fmt::{self, Debug};
 pub type Action = usize;
 
 // GameState is an abstraction of a 2D board game.
-pub trait GameState: Clone + fmt::Display + Debug{
+pub trait GameState: Default + Clone + fmt::Display + Debug{
     const ACTN_SPC_SIZE: usize; // Input action space is scalar [0, ACTN_SPC_SIZE).
     const N_CHAN: usize; // Game can be represented as flattened tensor [[[f32; COLS]; ROWS]; N_CHAN]
     const ROWS: usize;
     const COLS: usize;
-
-    fn new() -> Self;
 
     fn to_tensor(&self) -> Vec<f32>; // flattened N_CHAN x ROWS x COLS
 

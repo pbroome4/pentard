@@ -2,10 +2,10 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::io::{self, Write};
 use burn::module::Module;
-use tracing::{Level, debug, info};
+use tracing::{debug, info};
 use tracing_subscriber::{fmt, prelude::*};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
-use burn::tensor::{Tensor, Device};
+use burn::tensor::{Tensor, Device, TensorData};
 use burn::optim::{Adam, AdamConfig, GradientsParams};
 
 mod tard;
@@ -15,7 +15,10 @@ mod engine;
 mod pente;
 
 use crate::gamestate::GameState;
-use pente::PenteState;
+use crate::pente::PenteState;
+use crate::evaluator::*;
+use crate::engine::SelfPlayElement;
+use crate::tard::TrainingElement;
 ////////////////////////////////////////
 //       ### Thread A, (one thread) ####
 //   1) Sample training data from replay buffer
@@ -73,10 +76,12 @@ fn train_tard(){
     info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;
-        let inference_tard = tard.valid();
+        
         while self_play_states_added < 3*training_size{ // self play thread
             info!("Commencing self-play iteration {}", self_play_iter_n);
-            let training_data = engine::run_self_play::<PenteState>(&inference_tard, n_rollouts);
+            let mut eval = TardEvaluator::new(tard.valid());
+            let training_data = engine::run_self_play::<PenteState, TardEvaluator>(&mut eval, n_rollouts);
+            let training_data =  selfplay_to_training(training_data, &device);
             info!("Adding {} training elements to buffer.", training_data.len());
             self_play_states_added += training_data.len();
             trn_buf.extend_front(training_data);
@@ -154,5 +159,22 @@ impl OutputManager{
 }
 
 
-
+fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>, device: &Device) -> Vec<TrainingElement>{
+    let mut te_vec = Vec::with_capacity(sp_vec.len());
+    for spe in sp_vec.into_iter(){
+        let state_td = TensorData::new(spe.g.to_tensor(),
+                                   [G::N_CHAN, G::ROWS, G::COLS]);
+        let state = Tensor::from_data(state_td, device);
+        let mcts_td = TensorData::new(spe.mcts_post, [G::ACTN_SPC_SIZE]);
+        let mcts_post = Tensor::from_data(mcts_td, device);
+        let outcome = Tensor::from_floats([spe.outcome], device);
+        let te = TrainingElement{
+            state: state,
+            mcts_posterior: mcts_post,
+            outcome: outcome
+        };
+        te_vec.push(te);
+    }
+    return te_vec;
+}
 
