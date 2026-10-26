@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 use std::fmt::write;
 use rand::RngExt;
 
+use crate::tard;
+
 
 #[derive(Debug, Module)]
 pub struct Tard{
@@ -37,23 +39,23 @@ impl Tard {
                device: &Device) -> Self
     {
         info!("Creating Tard in_chan:{}, rows: {},  cols:{}", in_chan, rows, cols);
-        let conv1 = Conv2dConfig::new([in_chan, 128], [3, 3])
+        let conv1 = Conv2dConfig::new([in_chan, 64], [3, 3])
             .with_padding(nn::PaddingConfig2d::Explicit(1, 1, 1, 1))
             .init(device);
-        let bn1 = BatchNormConfig::new(128).init(device);
+        let bn1 = BatchNormConfig::new(64).init(device);
         let mut resnets = Vec::new();
-        for i in 0..12{ // 12 resnet layers
-            resnets.push(ResNet::new(128, device));
+        for i in 0..6{ // N resnet layers
+            resnets.push(ResNet::new(64, device));
         }
 
-        let policy_conv = Conv2dConfig::new([128, 2], [1, 1]).init(device);
+        let policy_conv = Conv2dConfig::new([64, 2], [1, 1]).init(device);
         let policy_bn = BatchNormConfig::new(2).init(device);
         let policy_fc = LinearConfig::new(2 * rows * cols, rows * cols).init(device);
 
-        let value_conv = Conv2dConfig::new([128, 1], [1, 1]).init(device);
+        let value_conv = Conv2dConfig::new([64, 1], [1, 1]).init(device);
         let value_bn = BatchNormConfig::new(1).init(device);
-        let value_fc1 = LinearConfig::new(action_space_size, 128).init(device);
-        let value_fc2 = LinearConfig::new(128, 1).init(device);
+        let value_fc1 = LinearConfig::new(action_space_size, 64).init(device);
+        let value_fc2 = LinearConfig::new(64, 1).init(device);
 
         let s = Self {
                 conv1,
@@ -174,7 +176,6 @@ impl TrainingBatch{
                 mcts_posterior:mcts_posterior_batch,
                 outcome:outcome_batch
             };
-        debug!("Training batch stats:\n {}", s);
         return s;
     }
 }
@@ -222,13 +223,16 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
     
     // policy networkloss
     let mcts_posterior_probs = batch.mcts_posterior.exp();
+    debug_assert!(mcts_posterior_probs.shape() == tard_policy_batch.shape());
     let cross_entropy_terms = mcts_posterior_probs * tard_policy_batch;
     let cross_entropy_loss = cross_entropy_terms.sum_dim(1)
                                                 .neg()
                                                 .mean();
 
     // value network loss
+    debug!("{}", batch.outcome);
     debug!("{}", tard_value_batch);
+    debug_assert!(tard_value_batch.shape() == batch.outcome.shape());
     let mse_loss = (tard_value_batch - batch.outcome).powf_scalar(2.0)
                                                      .mean();
     

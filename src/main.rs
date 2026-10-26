@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::io::{self, Write};
 use burn::module::Module;
 use tracing::{Level, debug, info};
-use tracing_subscriber;
+use tracing_subscriber::{fmt, prelude::*};
+use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Tensor, Device};
 use burn::optim::{Adam, AdamConfig, GradientsParams};
 
@@ -41,14 +42,17 @@ use pente::PenteState;
 
 
 fn main(){
+    let mut filter = EnvFilter::from_default_env()
+        .add_directive(LevelFilter::WARN.into());
+    filter = filter.add_directive("pentard=debug".parse().unwrap());
     tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG) // Set max level: TRACE, DEBUG, INFO, WARN, ERROR, or OFF
+        .with_env_filter(filter)
         .init();
     train_tard();
 }
 
 fn train_tard(){
-    let device = Device::default();
+    let device = Device::default().autodiff();
     info!("Using Device: {:?}", device);
     let mut tard = tard::Tard::new(PenteState::N_CHAN,
         PenteState::ROWS,
@@ -61,10 +65,11 @@ fn train_tard(){
     let mut trn_buf = tard::TrainingBuffer::<50000>::new();
     let om = OutputManager::new("output", false).unwrap();
 
+    let training_iterations = 20; // number of iterations of training per loop
+    let training_size = 64;  // batch size for training.
+    let n_rollouts = 200;
     let mut trn_iter_n: u32 = 0;
     let mut self_play_iter_n: u32 = 0;
-    let training_size = 64;
-    let n_rollouts = 200;
     info!("Training batch size {}", training_size);
     loop{
         let mut self_play_states_added = 0;
@@ -78,7 +83,7 @@ fn train_tard(){
             self_play_iter_n += 1;
         }
         debug!("Training buffer size {}", trn_buf.len());
-        for i in 0..20{     // training thread
+        for i in 0..training_iterations{     // training thread
             info!("Commencing training iteration {}", trn_iter_n);
             let trn_sample = trn_buf.sample(training_size);
             t_loss = tard::compute_loss(&tard, &trn_sample);
@@ -127,7 +132,7 @@ impl OutputManager{
 
         if append == false{
             info!("Deleting directory {}", basepath_d.display());
-            fs::remove_dir_all(&basepath_d)?;
+            fs::remove_dir_all(&basepath_d);
         }
         info!("Creating directory {}", basepath_d.display());
         fs::create_dir_all(&basepath_d)?;

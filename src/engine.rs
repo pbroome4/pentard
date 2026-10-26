@@ -42,6 +42,7 @@ pub fn run_self_play <G: GameState>(
         sp_vec.push(sp_element);
         debug!("Playing action: {}", action);
         g.apply_action(action);
+        move_n += 1;
     }
     debug!("Current State: \n{}", g);
     let outcome = g.get_terminal_value() as f32;
