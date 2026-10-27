@@ -2,6 +2,7 @@ use std::fs::{OpenOptions};
 use std::io::{Write};
 use std::thread;
 use burn::module::Module;
+use pentard::tard::Tard;
 use tracing::{debug, info};
 use tracing_subscriber::{prelude::*};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
@@ -54,7 +55,7 @@ use crate::utils::*;
 fn main(){
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=debug".parse().unwrap());
+    filter = filter.add_directive("pentard=trace".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
@@ -66,9 +67,9 @@ fn train_tard(){
     let n_cpus = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1); // Fallback to 1 if it cannot be determined
-    let n_worker_threads = 1;
+    let n_worker_threads = 5;
     let n_rollouts = 200;
-    let n_self_play_per_train = 1;
+    let n_elements_per_train = 1;
     let training_steps_per_iter = 10;
     let batch_size = 128;
     let train_mem_capacity:usize = 30000;
@@ -86,7 +87,8 @@ fn train_tard(){
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
-    let eval = BatchedTardEvaluator::new().init(tard);
+    //let eval = BatchedTardEvaluator::new().init(tard); //BatchedTardEvaluator::new().init(tard);
+    let eval = TardEvaluator::new(&tard);
     let (s, r) = crossbeam::channel::unbounded();
     let handles = spawn_workers::<PenteState>(n_worker_threads, s, eval, n_rollouts);       
 
@@ -117,7 +119,7 @@ fn spawn_workers <G: GameState>(
         let eval_clone = eval.clone();
         info!("Spawning worker thread #{}", i);
         let h = thread::spawn(move ||{
-            let game_data = run_self_play::<G>(eval_clone, n_rollouts);
+            let game_data = run_self_play::<G>(&eval_clone, n_rollouts);
             debug!("Worker thread #{} Self play complete.", i);
             debug!("Worker thread #{} adding {} training elements", i, game_data.len());
             for d in game_data.into_iter(){
