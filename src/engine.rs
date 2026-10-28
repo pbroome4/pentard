@@ -12,6 +12,7 @@ use rand_distr::multi::Dirichlet;
 use crate::tard::{self, TrainingElement};
 use crate::gamestate::{GameState, Action};
 use crate::evaluator::*;
+use crate::utils::{legalize_policy, normalize};
 
 
 pub fn inference <G: GameState>(
@@ -130,7 +131,7 @@ fn mcts_sim <G:GameState>
         if state.is_terminal(){
             state.get_terminal_value() as f32
         }else{
-            tree.expand(node_id, state, eval, dhp)
+            tree.expand(node_id, &state, eval, dhp)
         };
     tree.back_propogate(node_id, value); 
 }
@@ -310,7 +311,7 @@ impl MctsTree{
     fn expand <G:GameState>(
         &mut self,
         node_id:NodeId,
-        state: G,
+        state: &G,
         eval: &impl Evaluator<G>,
         dhp: &DirichletHParams,
     ) -> f32{
@@ -320,6 +321,7 @@ impl MctsTree{
         if node_id == 0{
             trace!("Adding dirichlet noise {} to root", dhp);
             p = add_dirichlet_noise(p, dhp);
+            p = legalize_policy(p, state);
         }
         for action in 0..p.len(){
             if p[action] > 0.0{   // Only add legal actions.

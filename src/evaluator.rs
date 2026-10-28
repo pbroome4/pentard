@@ -7,14 +7,14 @@ use tracing::{trace, debug, info, warn};
 
 use crate::gamestate::*;
 use crate::tard::*;
-
+use crate::utils::*;
 ////////////////////////////////////////////////////////////////////////
 
 // Takes input state, evaluates it, and returns (policy, value) dual output.
 // vector is probability (NOT log) distribution over legal moves
 // f32 is scalar score of current position.
 pub trait Evaluator <G: GameState>: Clone{
-    fn evaluate (&self, g: G) -> (Vec<f32>, f32);
+    fn evaluate (&self, g: &G) -> (Vec<f32>, f32);
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -24,9 +24,9 @@ pub trait Evaluator <G: GameState>: Clone{
 pub struct NullEvaluator{}
 
 impl <G:GameState> Evaluator<G> for NullEvaluator{
-    fn evaluate (&self, g: G) -> (Vec<f32>, f32) {
+    fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
         let p = vec![1.0; G::ACTN_SPC_SIZE];
-        return (legalize_policy(p, &g), 0.0);
+        return (legalize_policy(p, g), 0.0);
     }
 }
 
@@ -45,7 +45,7 @@ impl TardEvaluator{
 }
 
 impl <G:GameState> Evaluator<G> for TardEvaluator{
-    fn evaluate (&self, g: G) -> (Vec<f32>, f32) {
+    fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
         let device = self.t.devices()
                   .into_iter()
                   .next()
@@ -59,7 +59,7 @@ impl <G:GameState> Evaluator<G> for TardEvaluator{
         let v_tens = v_batch.flatten::<1>(0, -1); // debatch
         let p: Vec<f32> = p_tens.exp().into_data().try_into_vec().unwrap();
         let v = v_tens.into_scalar::<f32>();
-        let p = legalize_policy(p, &g);
+        let p = legalize_policy(p, g);
         return (p, v);
     }
 }
@@ -98,7 +98,7 @@ where
             info!("Starting NullEvalServer");
             let n = NullEvaluator{};
             while let Ok(req) = r.recv(){
-                let (p,v) = n.evaluate(req.g);
+                let (p,v) = n.evaluate(&req.g);
                 let resp = EvalResponse{
                     p:p,
                     v:v
@@ -161,7 +161,7 @@ fn start_tard_eval_server<G:GameState>(
     let t = r_u.recv().unwrap();
     debug!("Got Tard Update");
     while let Ok(req) = r_e.recv(){
-        let (p,v) = t.evaluate(req.g);
+        let (p,v) = t.evaluate(&req.g);
         let resp = EvalResponse{
             p:p,
             v:v
@@ -382,10 +382,10 @@ pub struct EvalClient <G>{
 }
 
 impl <G:GameState> Evaluator<G> for EvalClient<G>{
-    fn evaluate(&self, g: G) -> (Vec<f32>, f32){
+    fn evaluate(&self, g: &G) -> (Vec<f32>, f32){
         let (s,r) = crossbeam::channel::unbounded();
         let req = EvalRequest{
-            g:g,
+            g:g.clone(),
             resp_chan: s
         };
         self.s_eval.send(req).unwrap();
@@ -407,23 +407,3 @@ struct EvalRequest<G>{
     resp_chan: Sender<EvalResponse>    // one-shot response channel
 }
 
-fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
-    let legal_mask = g.legal_actions_mask();
-    for i in 0..p.len(){
-        if legal_mask[i] == 0.0{
-            p[i] = 0.0;
-        }
-    }
-    return normalize(p);
-}
-
-
-// normalizes probability vector to 1.0.
-// Assumes sim is non-zero and that each element >=0
-fn normalize(mut v: Vec<f32>) -> Vec<f32> {
-    let sum:f32 = v.iter().sum();
-    for e in v.iter_mut(){
-        *e = *e/sum;
-    }
-    return v;
-}

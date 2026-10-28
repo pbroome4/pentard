@@ -98,3 +98,25 @@ pub fn read_move() -> Result<(usize, usize), String>{
         } 
     }
 }
+
+
+pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
+    let legal_mask = g.legal_actions_mask();
+    for i in 0..p.len(){
+        if legal_mask[i] == 0.0{
+            p[i] = 0.0;
+        }
+    }
+    return normalize(p);
+}
+
+
+// normalizes probability vector to 1.0.
+// Assumes sim is non-zero and that each element >=0
+pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let sum:f32 = v.iter().sum();
+    for e in v.iter_mut(){
+        *e = *e/sum;
+    }
+    return v;
+}
