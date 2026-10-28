@@ -72,6 +72,8 @@ fn train_tard(){
     let n_training_steps_per_iter = 16;
     let batch_size = 128;
     let train_mem_capacity: usize = 30000;
+    let dirchlet_hyper_params = DirichletHParams::from_gamestate::<PenteState>();
+
 
     let om = OutputManager::new("output", false).unwrap();
     let device = Device::default().autodiff();
@@ -89,7 +91,12 @@ fn train_tard(){
     let eval_srv = BatchedTardEvalServer::default();
     eval_srv.update(&tard);
     let (s_games, r_games) = crossbeam::channel::bounded(4096);
-    let handles = spawn_workers::<PenteState>(n_worker_threads, s_games, &eval_srv, n_rollouts);       
+    let handles = spawn_workers::<PenteState>(
+        n_worker_threads,
+        s_games,
+        &eval_srv,
+        n_rollouts,
+        dirchlet_hyper_params);       
     let mut is_running = true;
     let mut epoch = 0;
     while is_running{
@@ -162,13 +169,14 @@ fn spawn_workers <G:GameState>(
     n_workers: usize,
     s: Sender<Vec<SelfPlayElement<G>>>,
     eval_srv: &impl EvalServer<G>,
-    n_rollouts: usize) -> Vec<thread::JoinHandle<()>>
+    n_rollouts: usize,
+    dhp: DirichletHParams) -> Vec<thread::JoinHandle<()>>
 {
     let mut v = Vec::new(); 
     for i in 0..n_workers{
         let s_clone = s.clone();
         let eval = eval_srv.get_client();
-        let h = start_worker(i, s_clone, eval, n_rollouts);
+        let h = start_worker(i, s_clone, eval, n_rollouts, dhp.clone());
         v.push(h);
     }
     return v;
@@ -179,14 +187,15 @@ fn start_worker<G:GameState>(
     thread_id: usize,
     s: Sender<Vec<SelfPlayElement<G>>>,
     eval: EvalClient<G>,
-    n_rollouts: usize) -> JoinHandle<()>
+    n_rollouts: usize,
+    dhp: DirichletHParams) -> JoinHandle<()>
 {    
     info!("Spawning worker thread #{}", thread_id);
     thread::spawn(move ||{
         let mut is_running = true;
         let mut self_play_count = 0;
         while is_running{
-            let game_data = run_self_play::<G>(&eval, n_rollouts);
+            let game_data = run_self_play::<G>(&eval, n_rollouts, &dhp);
             debug!("Worker thread #{} Self play game {} complete.", thread_id, self_play_count);
             debug!("Worker thread #{} adding {} training elements", thread_id, game_data.len());
             match s.send(game_data){

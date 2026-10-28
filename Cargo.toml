@@ -12,3 +12,4 @@ tracing-subscriber = "0.3.23"
 crossbeam = "0.8"
 burn = { version = "0.22.1", features = ["flex", "cuda", "fusion"] }
 bounded-vec-deque = "0.1.1"
+rand_distr = "0.6.0"

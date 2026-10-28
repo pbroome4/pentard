@@ -4,8 +4,10 @@ use burn::tensor::{Device, Tensor, TensorData};
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use tracing::{trace, debug, info};
+use std::fmt::Display;
 use std::{fmt, vec};
 use rand;
+use rand_distr::multi::Dirichlet;
 
 use crate::tard::{self, TrainingElement};
 use crate::gamestate::{GameState, Action};
@@ -16,8 +18,9 @@ pub fn inference <G: GameState>(
     g: &G,
     eval: &impl Evaluator<G>,
     num_rollouts: usize) -> (Action, f32)
-{
-    let (mcts_post, val_post) = mcts(g, eval, num_rollouts);
+{   
+    let dhp = DirichletHParams::default();
+    let (mcts_post, val_post) = mcts(g, eval, num_rollouts, &dhp);
     let mcts_prob = exp(&mcts_post);
     let action = WeightedIndex::new(&mcts_prob)
                                .unwrap()
@@ -30,6 +33,7 @@ pub fn inference <G: GameState>(
 pub fn run_self_play <G: GameState>(
     eval: &impl Evaluator<G>,
     num_sims: usize,
+    dhp: &DirichletHParams,
 ) -> Vec<SelfPlayElement<G>>{
     debug!("Running self play");
     let mut sp_vec = Vec::new();
@@ -38,7 +42,7 @@ pub fn run_self_play <G: GameState>(
     while !g.is_terminal(){
         debug!("Current State: \n{}", g);
         debug!("Computing self-play move#: {}", move_n);
-        let (mcts_post, val_post) = mcts(&g, eval, num_sims);
+        let (mcts_post, val_post) = mcts(&g, eval, num_sims, dhp);
         let mcts_prob = exp(&mcts_post);
         let action = WeightedIndex::new(&mcts_prob)
                                    .unwrap()
@@ -80,12 +84,13 @@ pub struct SelfPlayElement<G:GameState>{
 pub fn mcts <G: GameState> (
     state: &G,
     eval: &impl Evaluator<G>,
-    num_sims: usize
+    num_sims: usize,
+    dhp: &DirichletHParams,
 ) -> (Vec<f32>, f32){
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new(1.0);
     for _ in 0..num_sims{
-        mcts_sim(&mut tree, state, eval);
+        mcts_sim(&mut tree, state, eval, dhp);
     }
     let root = tree.get(0).unwrap();
     debug!("Mcts root node: {}", root);
@@ -105,7 +110,8 @@ fn mcts_sim <G:GameState>
 (
     tree: &mut MctsTree,
     state_orig: &G,
-    eval: &impl Evaluator<G>
+    eval: &impl Evaluator<G>,
+    dhp: &DirichletHParams,
 ){
     let mut state = state_orig.clone();
     let mut node_id = 0; // Root
@@ -124,7 +130,7 @@ fn mcts_sim <G:GameState>
         if state.is_terminal(){
             state.get_terminal_value() as f32
         }else{
-            tree.expand(node_id, state, eval)
+            tree.expand(node_id, state, eval, dhp)
         };
     tree.back_propogate(node_id, value); 
 }
@@ -305,11 +311,16 @@ impl MctsTree{
         &mut self,
         node_id:NodeId,
         state: G,
-        eval: &impl Evaluator<G>
+        eval: &impl Evaluator<G>,
+        dhp: &DirichletHParams,
     ) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
         trace!("Expanding node {}", node_id);
-        let (p, v) = eval.evaluate(state);
+        let (mut p, v) = eval.evaluate(state);
+        if node_id == 0{
+            trace!("Adding dirichlet noise {} to root", dhp);
+            p = add_dirichlet_noise(p, dhp);
+        }
         for action in 0..p.len(){
             if p[action] > 0.0{   // Only add legal actions.
                 self.add_child(action, node_id, p[action]);
@@ -355,4 +366,54 @@ fn exp (v: &Vec<f32>) -> Vec<f32>{
         o.push((*e).exp());
     }
     return o;
+}
+
+
+
+
+
+#[derive(Debug, Clone)]
+pub struct DirichletHParams{
+    epsilon: f32, // [0,1]. Mixing param. What percent of prior is from dirichlet noise
+                  // Set to 0 to disable dirichlet noise.
+    alpha: f32, // Concentration parameter.
+}
+
+impl DirichletHParams{
+    pub fn from_gamestate<G:GameState>() -> Self{
+        Self {
+            epsilon: 0.25,
+            alpha: 10.0 / G::ACTN_SPC_SIZE as f32,
+        }
+    }
+}
+
+impl Default for DirichletHParams{
+    fn default() -> Self {
+        Self {
+            epsilon: 0.0,
+            alpha: 1.0,
+        }
+    }
+}
+
+
+impl Display for DirichletHParams{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DirichletHParams{{epislon: {}, alpha: {} }}",
+               self.epsilon, self.alpha).unwrap();
+        return Ok(());
+    }
+}
+
+fn add_dirichlet_noise(mut p: Vec<f32>, dhp: &DirichletHParams) -> Vec<f32>{
+    let alpha_vec = vec![dhp.alpha; p.len()];
+    let dirichlet = Dirichlet::new(&alpha_vec).unwrap();
+    let mut rng = rand::rng();
+    let noise = dirichlet.sample(&mut rng);
+    for i in 0..p.len(){
+        p[i] = dhp.epsilon * p[i] + (1.0 - dhp.epsilon) * noise[i];
+    }
+    return p;
+
 }
