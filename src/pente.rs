@@ -248,11 +248,11 @@ impl PenteState{
     }
 }
 
-fn coord_2_action(row: usize, col:usize) -> usize{
+pub fn coord_2_action(row: usize, col:usize) -> usize{
         row * PenteState::COLS + col
     }
 
-fn action_2_coord(action: usize) -> (usize, usize){
+pub fn action_2_coord(action: usize) -> (usize, usize){
     let row = action / PenteState::COLS;
     let col = action - row * PenteState::COLS;
     (row, col)

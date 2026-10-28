@@ -12,6 +12,21 @@ use crate::gamestate::{GameState, Action};
 use crate::evaluator::*;
 
 
+pub fn inference <G: GameState>(
+    g: &G,
+    eval: &impl Evaluator<G>,
+    num_rollouts: usize) -> (Action, f32)
+{
+    let (mcts_post, val_post) = mcts(g, eval, num_rollouts);
+    let mcts_prob = exp(&mcts_post);
+    let action = WeightedIndex::new(&mcts_prob)
+                               .unwrap()
+                               .sample(&mut rand::rng());
+    debug!("Current eval: {}", val_post);
+    return (action, val_post);
+}
+
+
 pub fn run_self_play <G: GameState>(
     eval: &impl Evaluator<G>,
     num_sims: usize,
@@ -23,9 +38,7 @@ pub fn run_self_play <G: GameState>(
     while !g.is_terminal(){
         debug!("Current State: \n{}", g);
         debug!("Computing self-play move#: {}", move_n);
-        let (mcts_pri, mcts_post) = mcts(&g, eval, num_sims);
-        debug!("MCTS prior logits: {:?}", &mcts_pri);
-        debug!("MCTS posterior logits:{:?}", &mcts_post);
+        let (mcts_post, val_post) = mcts(&g, eval, num_sims);
         let mcts_prob = exp(&mcts_post);
         let action = WeightedIndex::new(&mcts_prob)
                                    .unwrap()
@@ -68,7 +81,7 @@ pub fn mcts <G: GameState> (
     state: &G,
     eval: &impl Evaluator<G>,
     num_sims: usize
-) -> (Vec<f32>, Vec<f32>){
+) -> (Vec<f32>, f32){
     // Run mcts and return the evaluated mcts policy
     let mut tree: MctsTree = MctsTree::new(1.0);
     for _ in 0..num_sims{
@@ -78,9 +91,14 @@ pub fn mcts <G: GameState> (
     debug!("Mcts root node: {}", root);
     let mcts_pri = mcts_tree_prior(&tree, 0, G::ACTN_SPC_SIZE);
     let mcts_post = mcts_tree_posterior(&tree, 0, G::ACTN_SPC_SIZE);
+    let val_post = root.value / root.visits as f32;
     debug!("total probs should be 1.0. mcts_pri: {}  mcts_post: {}", total_prob(&mcts_pri), total_prob(&mcts_post));
-    return (mcts_pri, mcts_post);
+    debug!("MCTS prior logits: {:?}", &mcts_pri);
+    debug!("MCTS posterior logits:{:?}", &mcts_post);
+    debug!("MCTS posterior value: {}", val_post);
+    return (mcts_post, val_post);
 }
+
 
 // Performs a single MCTS simulation using PUCT
 fn mcts_sim <G:GameState>

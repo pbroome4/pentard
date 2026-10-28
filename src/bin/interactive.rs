@@ -9,6 +9,8 @@ use clap::Parser;
 use pentard::pente::*;
 use pentard::gamestate::*;
 use pentard::engine::*;
+use pentard::utils::*;
+
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -22,36 +24,6 @@ struct Args{
     n: u64,
 }
 
-
-fn parse_coord(s: &str) -> Result<(usize, usize), String> {
-    let mut parts = s.trim().split(',');
-    if let (Some(row_str), Some(col_str)) = (parts.next(), parts.next()) {
-        let x: Result<usize, _> = row_str.trim().parse();
-        let y: Result<usize, _> = col_str.trim().parse();
-        match (x, y) {
-            (Ok(row), Ok(col)) => {
-                return Ok((row, col));
-            }
-            _ =>{
-                return Err(String::from("Invalid format"));
-            } 
-        }
-    }
-    return Err(String::from("Invalid format"));
-}
-
-fn read_move() -> Result<(usize, usize), String>{
-    let mut input_buffer = String::new();
-    io::stdin().read_line(&mut input_buffer).unwrap();
-    match parse_coord(&input_buffer){
-        Ok((r,c)) => {
-            return Ok((r,c));
-        }
-        Err(s) =>{
-            return Err(s);
-        } 
-    }
-}
 
 fn main(){
     let args = Args::parse();

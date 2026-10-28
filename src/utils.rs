@@ -25,9 +25,11 @@ impl OutputManager{
             info!("Deleting directory {}", basepath_d.display());
             fs::remove_dir_all(&basepath_d);
         }
-        info!("Creating directory {}", basepath_d.display());
-        fs::create_dir_all(&basepath_d)?;
-        fs::create_dir_all(&model_d)?;
+        if !fs::exists(&model_d).unwrap(){
+            info!("Creating directory {}", basepath_d.display());
+            fs::create_dir_all(&basepath_d)?;
+            fs::create_dir_all(&model_d)?;
+        }
         let mut lf = OpenOptions::new().create(true)
                                   .append(true)
                                   .write(true)
@@ -62,4 +64,37 @@ pub fn selfplay_to_training<G:GameState>(sp_vec: Vec<SelfPlayElement<G>>, device
         te_vec.push(te);
     }
     return te_vec;
+}
+
+
+
+pub fn parse_coord(s: &str) -> Result<(usize, usize), String> {
+    let mut parts = s.trim().split(',');
+    if let (Some(row_str), Some(col_str)) = (parts.next(), parts.next()) {
+        let x: Result<usize, _> = row_str.trim().parse();
+        let y: Result<usize, _> = col_str.trim().parse();
+        match (x, y) {
+            (Ok(row), Ok(col)) => {
+                return Ok((row, col));
+            }
+            _ =>{
+                return Err(String::from("Invalid format"));
+            } 
+        }
+    }
+    return Err(String::from("Invalid format"));
+}
+
+
+pub fn read_move() -> Result<(usize, usize), String>{
+    let mut input_buffer = String::new();
+    io::stdin().read_line(&mut input_buffer).unwrap();
+    match parse_coord(&input_buffer){
+        Ok((r,c)) => {
+            return Ok((r,c));
+        }
+        Err(s) =>{
+            return Err(s);
+        } 
+    }
 }

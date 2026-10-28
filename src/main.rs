@@ -126,7 +126,7 @@ fn train_tard(){
         info!("Updating Evaluator Thread");
         eval_srv.update(&tard);
 
-        if epoch % 1 == 0{
+        if epoch % 100 == 0{
             info!("Saving model");
             let model_name = format!("model_{}", epoch);
             tard.clone().save_file(om.model_d.join(model_name))
