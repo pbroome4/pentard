@@ -238,9 +238,9 @@ fn start_batched_tard_eval_server<G:GameState>(
         while is_running{    
             // Check for Tard updates
             trace!("BTE Recieve checking for Tard Updates");
-            //let (t_updated, recv_connected) = check_for_model_update(r_u.clone(), t);
-            //t = t_updated;
-            //is_running &= recv_connected;
+            let (t_updated, recv_connected) = check_for_model_update(r_u.clone(), t);
+            t = t_updated;
+            is_running &= recv_connected;
 
             // Perform batch requests
             let (n, recv_connected) = read_queue(&r_e, &mut q);
@@ -291,14 +291,14 @@ fn check_for_model_update(r_tard: Receiver<Tard>, t_in: Tard) -> (Tard, bool){
     loop{
         match r_tard.try_recv(){
             Ok(t_updated) => {
-                debug!("BTE updating model");
+                info!("BTE updating model");
                 t = t_updated;
             }
             Err(TryRecvError::Empty) => {
                 break; // nothing to update
             }
             Err(TryRecvError::Disconnected) => {
-                debug!("BTE tard receive channel closed ... signaling terminate for BTE thread");
+                info!("BTE tard receive channel closed ... signaling terminate for BTE thread");
                 is_connected = false;
                 break;
             }

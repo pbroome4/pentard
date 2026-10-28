@@ -55,7 +55,7 @@ use crate::tard::*;
 fn main(){
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=debug".parse().unwrap());
+    filter = filter.add_directive("pentard=info".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
@@ -109,10 +109,7 @@ fn train_tard(){
                     break
                 }
             }
-            if el_cnt >= n_elements_per_train{
-                break;
-            }
-            debug!("Read Game {}/{} game elements", el_cnt, n_elements_per_train);
+            info!("Read {}/{} game elements for next training loop", el_cnt, n_elements_per_train);
         }
         
         info!("Performing training epoch {}", epoch);
@@ -125,7 +122,7 @@ fn train_tard(){
             let grad_params = GradientsParams::from_grads(grads, &tard);
             tard = opt.step(1e-4, tard, grad_params);
         }
-        info!("Trainin epoch {} complete", epoch);
+        info!("Training epoch {} complete", epoch);
         
         info!("Updating Evaluator Thread");
         eval_srv.update(&tard);
