@@ -233,7 +233,7 @@ fn start_batched_tard_eval_server<G:GameState>(
                       .into_iter()
                       .next()
                       .unwrap();
-        const BATCH_SIZE: usize = 32;
+        const BATCH_SIZE: usize = 512;
         let mut q = VecDeque::<EvalRequest<G>>::new();
         while is_running{    
             // Check for Tard updates
