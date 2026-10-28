@@ -1,8 +1,5 @@
-
 use std::collections::VecDeque;
-use std::io::ErrorKind::TimedOut;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
 use burn::tensor::{Device, Tensor, TensorData};
 use burn::module::Module;
 use crossbeam::channel::{Receiver, RecvError, RecvTimeoutError, Sender, TryRecvError};
@@ -11,13 +8,16 @@ use tracing::{trace, debug, info, warn};
 use crate::gamestate::*;
 use crate::tard::*;
 
-// Takes input state, runs it through network,
-// returns dual head output
+////////////////////////////////////////////////////////////////////////
+
+// Takes input state, evaluates it, and returns (policy, value) dual output.
 // vector is probability (NOT log) distribution over legal moves
-// f32 is scalar score of current position
-pub trait Evaluator <G: GameState>: Clone + Send + 'static{
+// f32 is scalar score of current position.
+pub trait Evaluator <G: GameState>: Clone{
     fn evaluate (&self, g: G) -> (Vec<f32>, f32);
 }
+
+///////////////////////////////////////////////////////////////////////
 
 // Always returns uniform probability over legal moves and 0.0 score.
 #[derive(Clone)]
@@ -29,6 +29,8 @@ impl <G:GameState> Evaluator<G> for NullEvaluator{
         return (legalize_policy(p, &g), 0.0);
     }
 }
+
+///////////////////////////////////////////////////////////////////////
 
 // Runs input state through Tard and returns dual head output
 #[derive(Clone)]
@@ -62,90 +64,174 @@ impl <G:GameState> Evaluator<G> for TardEvaluator{
     }
 }
 
-#[derive(Debug)]
-struct BatchedEvalResponse{
-    p: Vec<f32>,
-    v: f32
+
+//////////////////////////////////////////////////////////////////////////////
+
+
+// Spawns a server (thread) running an evaluator, provides a means to update
+// this evaluator, and provides a way to get clients to this thread.
+pub trait EvalServer <G>{
+    fn get_client(&self) -> EvalClient<G>;
+    fn update_srv(&self);
 }
 
-#[derive(Debug)]
-struct BatchedEvalRequest<G: GameState>{
-    g: G,
-    resp_chan: Sender<BatchedEvalResponse>    // one-shot response channel
+pub struct NullEvalServer<G>{
+    s_eval:  Sender<EvalRequest<G>>
 }
 
-
-// Will batch evaluations to Tard.
-// Evaluations require synchronization with device (possibly gpu). 
-// To reduce synchronization overhead, we prefer to batch Tard eval requests.
-// This struct uses crossbeam channels to add evaluation requests to a common
-// queue and return individual evaluation results.
-#[derive(Clone)]
-pub struct BatchedTardEvaluator <G:GameState>{
-    s_eval: Sender<BatchedEvalRequest<G>>, // Channel to send batched requests to
-    s_tard: Sender<Tard> // Channel to send updated Models
-} 
-
-
-impl <G: GameState> BatchedTardEvaluator<G>{
-    pub fn new()->Self{
-        let (s_eval, r_eval) = crossbeam::channel::bounded::<BatchedEvalRequest<G>>(1024);
-        let (s_tard, r_tard) = crossbeam::channel::unbounded::<Tard>();
-        start_bte_recieve_thread(r_eval, r_tard);
-        let s = Self{
-            s_eval: s_eval,
-            s_tard: s_tard
-        };
-        return s;
+impl <G> EvalServer<G> for NullEvalServer<G>{
+    fn get_client(&self) -> EvalClient<G>{
+        return EvalClient{s_eval: self.s_eval.clone()};
     }
-    
-    pub fn init(self, t: Tard) -> Self{
-        self.s_tard.send(t).unwrap();
-        return self;
+    fn update_srv(&self){ // do nothing
     }
 }
 
 
-impl <G:GameState> Evaluator<G> for BatchedTardEvaluator<G>{
-    fn evaluate (&self, g: G) -> (Vec<f32>, f32) {
-        let (s,r) = crossbeam::channel::bounded::<BatchedEvalResponse>(1); // one-shot channel
-        let req = BatchedEvalRequest{
-            g: g,
-            resp_chan: s,
-        };
-        self.s_eval.send(req).unwrap();
-        let resp = r.recv().unwrap(); // blocking to revieve response
-        return (resp.p, resp.v);
-    }  
-}
-
-fn start_bte_recieve_thread<G: GameState> (
-    r_eval: Receiver<BatchedEvalRequest<G>>,
-    r_tard: Receiver<Tard>) -> JoinHandle<()>
+impl <G> Default for NullEvalServer<G>
+where 
+    G:GameState + Send
 {
-    thread::spawn(move ||{  // Will run as long as there is a sender
+    fn default() -> Self {
+        let (s,r) = crossbeam::channel::unbounded::<EvalRequest<G>>();
+        thread::spawn(move ||{
+            info!("Starting NullEvalServer");
+            let n = NullEvaluator{};
+            while let Ok(req) = r.recv(){
+                let (p,v) = n.evaluate(req.g);
+                let resp = EvalResponse{
+                    p:p,
+                    v:v
+                };
+                req.resp_chan.send(resp).unwrap();
+            }
+            info!("NullEvalServer Shutting down");
+        });
+        Self{
+            s_eval: s
+        }        
+    }
+}
+
+
+pub struct TardEvalServer<G>{
+    s_update: Sender<TardEvaluator>,
+    s_eval:  Sender<EvalRequest<G>>
+}
+
+impl <G> TardEvalServer<G>{
+    pub fn update(&self, t: Tard){
+        let eval = TardEvaluator::new(&t);
+        self.s_update.send(eval).unwrap();
+    }
+}
+
+impl <G> EvalServer<G> for TardEvalServer<G>{
+    fn get_client(&self) -> EvalClient<G>{
+        return EvalClient{s_eval: self.s_eval.clone()};
+    }
+    fn update_srv(&self){
+        warn!("TODO");
+    }
+}
+
+impl <G>Default for TardEvalServer<G>
+where
+    G: GameState + Send
+{
+    fn default() -> Self{
+        let (s_u, r_u) = crossbeam::channel::unbounded();
+        let (s_e, r_e) = crossbeam::channel::unbounded();
+        thread::spawn(move ||{
+            start_tard_eval_server(r_u, r_e)
+        });
+        Self {
+            s_update: s_u,
+            s_eval: s_e
+        }
+    }
+}
+
+fn start_tard_eval_server<G:GameState>(
+    r_u: Receiver<TardEvaluator>,
+    r_e: Receiver<EvalRequest<G>>)
+{
+    info!("Starting TardEvalServer");
+    debug!("Awaiting Tard Update");
+    let t = r_u.recv().unwrap();
+    debug!("Got Tard Update");
+    while let Ok(req) = r_e.recv(){
+        let (p,v) = t.evaluate(req.g);
+        let resp = EvalResponse{
+            p:p,
+            v:v
+        };
+        req.resp_chan.send(resp).unwrap();
+    }
+    info!("TardEvalServer shutting down")    
+}
+
+
+pub struct BatchedTardEvalServer<G>{
+    s_update: Sender<Tard>,
+    s_eval:  Sender<EvalRequest<G>>
+}
+
+
+impl <G> BatchedTardEvalServer<G>{
+    pub fn update(&self, t: Tard){
+        self.s_update.send(t.valid()).unwrap();
+    }
+}
+
+
+impl <G> EvalServer<G> for BatchedTardEvalServer<G>{
+    fn get_client(&self) -> EvalClient<G>{
+        return EvalClient{s_eval: self.s_eval.clone()};
+    }
+    fn update_srv(&self){
+        warn!("TODO");
+    }
+}
+
+
+impl <G>Default for BatchedTardEvalServer<G>
+where
+    G: GameState + Send
+{
+    fn default() -> Self{
+        let (s_u, r_u) = crossbeam::channel::unbounded();
+        let (s_e, r_e) = crossbeam::channel::unbounded();
+        thread::spawn(move ||{
+            start_batched_tard_eval_server(r_u, r_e)
+        });
+        Self {
+            s_update: s_u,
+            s_eval: s_e
+        }
+    }
+}
+
+
+fn start_batched_tard_eval_server<G:GameState>(
+    r_u: Receiver<Tard>,
+    r_e: Receiver<EvalRequest<G>>)
+{
+    thread:: spawn(move ||{
         debug!("BTE reciever thread starting");
         debug!("BTE awaiting Tard");
         let mut is_running = true;
-        let Ok(mut t) = r_tard.recv() else {
-            debug!("BTE tard receive channel closed ... killing BTE thread");
-            return;
-        };
+        let t = r_u.recv().unwrap();
         debug!("BTE recieved Tard");
         let device = t.devices()
                       .into_iter()
                       .next()
-                      .expect("Expected at least one device");
+                      .unwrap();
         const BATCH_SIZE: usize = 32;
-        let mut q = VecDeque::<BatchedEvalRequest<G>>::new();
-        while is_running{
-            // Check for model updates
-            //let (t_updated, recv_connected) = check_for_model_update(r_tard.clone(), t);
-            //t = t_updated;
-            //is_running &= recv_connected;
-            
+        let mut q = VecDeque::<EvalRequest<G>>::new();
+        while is_running{    
             // Perform batch requests
-            let (n, recv_connected) = read_queue(&r_eval, &mut q);
+            let (n, recv_connected) = read_queue(&r_e, &mut q);
             trace!("Added {} elements to BTE queue", n);
             is_running &= recv_connected;
             if q.len() > 0{
@@ -154,12 +240,12 @@ fn start_bte_recieve_thread<G: GameState> (
                 let b_tens = batch_eval_tensor(&q, &device, batch_size);
                 let (p_batch, v_batch) = t.forward(b_tens);
                 let mut p_batch_vec = p_batch.exp()
-                                         .into_data()
-                                         .try_into_vec::<f32>()
-                                         .unwrap(); 
+                                            .into_data()
+                                            .try_into_vec::<f32>()
+                                            .unwrap(); 
                 let mut v_batch_vec = v_batch.into_data()
-                                         .try_into_vec::<f32>()
-                                         .unwrap();
+                                            .try_into_vec::<f32>()
+                                            .unwrap();
                 // count backward because efficient to delete from end of vector          
                 for i in (0..batch_size).rev(){
                     let p = p_batch_vec.split_off(p_batch_vec.len() - G::ACTN_SPC_SIZE);
@@ -167,7 +253,7 @@ fn start_bte_recieve_thread<G: GameState> (
                     let v = v_batch_vec.pop().unwrap();
                     trace!("Batch element {}/{} has p: {:?}, v: {}",
                             i+1, batch_size, &p, &v);
-                    let resp = BatchedEvalResponse{
+                    let resp = EvalResponse{
                         p: p,
                         v: v,
                     };
@@ -182,8 +268,9 @@ fn start_bte_recieve_thread<G: GameState> (
             }
         }
         debug!("BatchedTardEvaluator receiver thread end");
-    })
+    });
 }
+
 
 
 fn check_for_model_update(r_tard: Receiver<Tard>, t_in: Tard) -> (Tard, bool){
@@ -209,7 +296,7 @@ fn check_for_model_update(r_tard: Receiver<Tard>, t_in: Tard) -> (Tard, bool){
 }
 
 fn batch_eval_tensor <G:GameState>(
-    q: &VecDeque<BatchedEvalRequest<G>>,
+    q: &VecDeque<EvalRequest<G>>,
     device: &Device,
     batch_size: usize
 ) -> Tensor<4>{
@@ -233,8 +320,8 @@ fn batch_eval_tensor <G:GameState>(
 //      Number of elements read into queue.
 //      is_connected
 fn read_queue<G:GameState>(
-    r: &Receiver<BatchedEvalRequest<G>>,
-    q: &mut VecDeque<BatchedEvalRequest<G>>) -> (usize, bool)
+    r: &Receiver<EvalRequest<G>>,
+    q: &mut VecDeque<EvalRequest<G>>) -> (usize, bool)
 {
     let n = q.len();
     let mut is_connected = true;
@@ -267,8 +354,47 @@ fn read_queue<G:GameState>(
     return (q.len() - n, is_connected);
 }
 
-// p is probability vector
-// Output is probability vector
+
+
+
+
+
+
+
+
+
+
+#[derive(Debug, Clone)]
+pub struct EvalClient <G>{
+    s_eval: Sender<EvalRequest<G>>
+}
+
+impl <G:GameState> Evaluator<G> for EvalClient<G>{
+    fn evaluate(&self, g: G) -> (Vec<f32>, f32){
+        let (s,r) = crossbeam::channel::unbounded();
+        let req = EvalRequest{
+            g:g,
+            resp_chan: s
+        };
+        self.s_eval.send(req).unwrap();
+        let resp = r.recv().unwrap();
+        return (resp.p, resp.v);
+    }
+}
+
+
+#[derive(Debug)]
+struct EvalResponse{
+    p: Vec<f32>,
+    v: f32
+}
+
+#[derive(Debug)]
+struct EvalRequest<G>{
+    g: G,
+    resp_chan: Sender<EvalResponse>    // one-shot response channel
+}
+
 fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
     let legal_mask = g.legal_actions_mask();
     for i in 0..p.len(){
@@ -289,4 +415,3 @@ fn normalize(mut v: Vec<f32>) -> Vec<f32> {
     }
     return v;
 }
-

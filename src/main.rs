@@ -55,7 +55,7 @@ use crate::utils::*;
 fn main(){
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=trace".parse().unwrap());
+    filter = filter.add_directive("pentard=debug".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
@@ -67,9 +67,9 @@ fn train_tard(){
     let n_cpus = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1); // Fallback to 1 if it cannot be determined
-    let n_worker_threads = 5;
+    let n_worker_threads = 20;
     let n_rollouts = 200;
-    let n_elements_per_train = 1;
+    let n_elements_per_train = 1;   
     let training_steps_per_iter = 10;
     let batch_size = 128;
     let train_mem_capacity:usize = 30000;
@@ -87,39 +87,40 @@ fn train_tard(){
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
-    //let eval = BatchedTardEvaluator::new().init(tard); //BatchedTardEvaluator::new().init(tard);
-    let eval = TardEvaluator::new(&tard);
-    let (s, r) = crossbeam::channel::unbounded();
-    let handles = spawn_workers::<PenteState>(n_worker_threads, s, eval, n_rollouts);       
+    let eval_srv = BatchedTardEvalServer::default();
+    eval_srv.update(tard);
+    let (s_games, r_games) = crossbeam::channel::unbounded();
+    let handles = spawn_workers::<PenteState>(n_worker_threads, s_games, &eval_srv, n_rollouts);       
 
     loop{
         let mut count = 0;
-        while let Ok(req) = r.recv(){
+        while let Ok(req) = r_games.recv(){
             debug!("Reading game element #{}", count);
             count+=1;
         }
-        drop(r); // should cause workers to fail to send game and terminate
+        
         for h in handles.into_iter(){
             h.join().unwrap();
         }
+        debug!("Main shutting down");
         break;
     }
 }
 
 
-fn spawn_workers <G: GameState>(
+fn spawn_workers <G:GameState>(
     n_workers: usize,
     s: Sender<SelfPlayElement<G>>,
-    eval: impl Evaluator<G>,
+    eval_srv: &impl EvalServer<G>,
     n_rollouts: usize) -> Vec<thread::JoinHandle<()>>
 {
     let mut v = Vec::new(); 
     for i in 0..n_workers{
         let s_clone = s.clone();
-        let eval_clone = eval.clone();
+        let eval = eval_srv.get_client();
         info!("Spawning worker thread #{}", i);
         let h = thread::spawn(move ||{
-            let game_data = run_self_play::<G>(&eval_clone, n_rollouts);
+            let game_data = run_self_play::<G>(&eval, n_rollouts);
             debug!("Worker thread #{} Self play complete.", i);
             debug!("Worker thread #{} adding {} training elements", i, game_data.len());
             for d in game_data.into_iter(){
