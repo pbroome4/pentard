@@ -67,10 +67,10 @@ fn train_tard(){
     let n_cpus = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1); // Fallback to 1 if it cannot be determined
-    let n_worker_threads = 10;
+    let n_worker_threads = 100;
     let n_rollouts = 200;
-    let n_elements_per_train = 1;   
-    let n_training_steps_per_iter = 10;
+    let n_elements_per_train = 1024;   
+    let n_training_steps_per_iter = 16;
     let batch_size = 128;
     let train_mem_capacity: usize = 30000;
 
