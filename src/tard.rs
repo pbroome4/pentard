@@ -5,7 +5,7 @@ use burn::tensor::Device;
 use burn::tensor::activation::{relu, tanh, log_softmax};
 use tracing::{trace, debug, info};
 use core::fmt;
-use std::collections::VecDeque;
+use bounded_vec_deque::BoundedVecDeque;
 use rand::RngExt;
 
 use crate::tard;
@@ -241,13 +241,13 @@ pub fn compute_loss(t: &Tard, v: &Vec<TrainingElement>) -> TardLoss{
 
 
 pub struct TrainingBuffer{
-    memory_: VecDeque<TrainingElement>,
+    memory_: BoundedVecDeque<TrainingElement>,
 }
 
-impl TrainingBuffer {
-    pub fn new(capacity: usize) -> Self {
+impl TrainingBuffer{
+    pub fn new(cap: usize) -> Self {
         return Self{
-            memory_: VecDeque::<TrainingElement>::with_capacity(capacity),
+            memory_: BoundedVecDeque::with_capacity(cap, cap),
         };
     }
 

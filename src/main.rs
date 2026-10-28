@@ -1,14 +1,13 @@
 use std::fs::{OpenOptions};
 use std::io::{Write};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use burn::module::Module;
-use pentard::tard::Tard;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use tracing_subscriber::{prelude::*};
 use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Device};
 use burn::optim::{AdamConfig, GradientsParams};
-use crossbeam::channel::{Sender, Receiver};
+use crossbeam::channel::{Receiver, RecvError, SendError, Sender};
 
 mod tard;
 mod gamestate;
@@ -22,14 +21,15 @@ use crate::pente::PenteState;
 use crate::engine::*;
 use crate::evaluator::*;
 use crate::utils::*;
+use crate::tard::*;
 ////////////////////////////////////////
 //      ## Main thread
 //  1) Initialize model, vars, logging, etc  
 //  2) Repeatedly self-play and train model
-//      2.1) Spawn eval and worker threads using current model
+//      2.1) Spawn eval and worker threads
 //      2.2) Collect worker data
 //      2.3) Perform training
-//      2.4) periodically update model in the eval thread.
+//      2.4) send update to eval thread.
 //  3) Eventually terminate
 //
 //       #### Worker thread (many threads) ###
@@ -49,7 +49,7 @@ use crate::utils::*;
 //  1) Recieve network eval requests on a queue
 //  2) Batch up requests and send to network
 //  3) Get evaluations and redistribute.
-//  4) Occassionaly resync with main thread.
+//  4) check for model updates from main thread.
 
 
 fn main(){
@@ -67,12 +67,12 @@ fn train_tard(){
     let n_cpus = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1); // Fallback to 1 if it cannot be determined
-    let n_worker_threads = 20;
+    let n_worker_threads = 10;
     let n_rollouts = 200;
     let n_elements_per_train = 1;   
-    let training_steps_per_iter = 10;
+    let n_training_steps_per_iter = 10;
     let batch_size = 128;
-    let train_mem_capacity:usize = 30000;
+    let train_mem_capacity: usize = 30000;
 
     let om = OutputManager::new("output", false).unwrap();
     let device = Device::default().autodiff();
@@ -88,29 +88,83 @@ fn train_tard(){
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
     let eval_srv = BatchedTardEvalServer::default();
-    eval_srv.update(tard);
-    let (s_games, r_games) = crossbeam::channel::unbounded();
+    eval_srv.update(&tard);
+    let (s_games, r_games) = crossbeam::channel::bounded(4096);
     let handles = spawn_workers::<PenteState>(n_worker_threads, s_games, &eval_srv, n_rollouts);       
-
-    loop{
-        let mut count = 0;
-        while let Ok(req) = r_games.recv(){
-            debug!("Reading game element #{}", count);
-            count+=1;
+    let mut is_running = true;
+    let mut epoch = 0;
+    while is_running{
+        info!("Sampling Self-Play Games");
+        let mut el_cnt = 0;
+        while el_cnt < n_elements_per_train{ 
+            match r_games.recv(){
+                Ok(req) =>{
+                    el_cnt += req.len();
+                    let train_vec = selfplay_to_training(req, &device);
+                    trn_buf.extend_front(train_vec.into_iter());
+                }
+                Err(RecvError) => {
+                    warn!("Game Receiver closed unexpectedly... signaling shutdown of main loop");
+                    is_running = false;
+                    break
+                }
+            }
+            if el_cnt >= n_elements_per_train{
+                break;
+            }
+            debug!("Read Game {}/{} game elements", el_cnt, n_elements_per_train);
         }
         
-        for h in handles.into_iter(){
-            h.join().unwrap();
+        info!("Performing training epoch {}", epoch);
+        let mut t_loss = TardLoss::default();
+        for _ in 0..n_training_steps_per_iter{
+            let trn_samples = trn_buf.sample(batch_size);
+            t_loss = compute_loss(&tard, &trn_samples);
+            debug!("{}", t_loss);
+            let grads = t_loss.loss.backward();
+            let grad_params = GradientsParams::from_grads(grads, &tard);
+            tard = opt.step(1e-4, tard, grad_params);
         }
-        debug!("Main shutting down");
-        break;
+        info!("Trainin epoch {} complete", epoch);
+        
+        info!("Updating Evaluator Thread");
+        eval_srv.update(&tard);
+
+        if epoch % 1 == 0{
+            info!("Saving model");
+            let model_name = format!("model_{}", epoch);
+            tard.clone().save_file(om.model_d.join(model_name))
+                        .expect("Unable to save model");
+            info!("Saving loss");
+            let mut lf = OpenOptions::new()
+                                  .write(true)
+                                  .append(true)
+                                  .open(&om.loss_f).unwrap();
+            writeln!(lf,
+                     "{}, {}, {}",
+                     t_loss.loss.clone()
+                                .into_scalar::<f32>(),
+                     t_loss.cross_entropy_loss.clone()
+                                              .into_scalar::<f32>(),
+                     t_loss.mse_loss.clone()
+                                    .into_scalar::<f32>(),
+                    ).unwrap();
+        }
+
+        epoch += 1;
     }
+    info!("Main thread loop over");
+    drop(r_games);
+    for h in handles.into_iter(){
+        h.join();
+    }
+    info!("Main thread shutting down");
 }
 
 
 fn spawn_workers <G:GameState>(
     n_workers: usize,
-    s: Sender<SelfPlayElement<G>>,
+    s: Sender<Vec<SelfPlayElement<G>>>,
     eval_srv: &impl EvalServer<G>,
     n_rollouts: usize) -> Vec<thread::JoinHandle<()>>
 {
@@ -118,17 +172,37 @@ fn spawn_workers <G:GameState>(
     for i in 0..n_workers{
         let s_clone = s.clone();
         let eval = eval_srv.get_client();
-        info!("Spawning worker thread #{}", i);
-        let h = thread::spawn(move ||{
-            let game_data = run_self_play::<G>(&eval, n_rollouts);
-            debug!("Worker thread #{} Self play complete.", i);
-            debug!("Worker thread #{} adding {} training elements", i, game_data.len());
-            for d in game_data.into_iter(){
-                s_clone.send(d).unwrap();   
-            }
-            debug!("Closing worker thread #{}", i);
-        });
+        let h = start_worker(i, s_clone, eval, n_rollouts);
         v.push(h);
     }
     return v;
+}
+
+
+fn start_worker<G:GameState>(
+    thread_id: usize,
+    s: Sender<Vec<SelfPlayElement<G>>>,
+    eval: EvalClient<G>,
+    n_rollouts: usize) -> JoinHandle<()>
+{    
+    info!("Spawning worker thread #{}", thread_id);
+    thread::spawn(move ||{
+        let mut is_running = true;
+        let mut self_play_count = 0;
+        while is_running{
+            let game_data = run_self_play::<G>(&eval, n_rollouts);
+            debug!("Worker thread #{} Self play game {} complete.", thread_id, self_play_count);
+            debug!("Worker thread #{} adding {} training elements", thread_id, game_data.len());
+            match s.send(game_data){
+                Ok(_)=>{}
+                Err(SendError(_))=>{
+                    info!("Worker {} Failed to send game state. Signalling shutdown.", thread_id);
+                    is_running = false;
+                    break;
+                }   
+            }
+            self_play_count += 1;   
+        }
+        debug!("Worker #{} Shutting down", thread_id);
+    })
 }

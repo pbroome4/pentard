@@ -179,8 +179,14 @@ pub struct BatchedTardEvalServer<G>{
 
 
 impl <G> BatchedTardEvalServer<G>{
-    pub fn update(&self, t: Tard){
-        self.s_update.send(t.valid()).unwrap();
+    pub fn update(&self, t: &Tard){
+        debug!("Sending BTE Server updated tard");
+        match self.s_update.send(t.valid()){
+            Ok(_) => {}
+            Err(_) => {
+                warn!("Send Error when update BTE Server Tard");
+            }
+        }
     }
 }
 
@@ -218,11 +224,11 @@ fn start_batched_tard_eval_server<G:GameState>(
     r_e: Receiver<EvalRequest<G>>)
 {
     thread:: spawn(move ||{
-        debug!("BTE reciever thread starting");
-        debug!("BTE awaiting Tard");
+        info!("BTE reciever thread starting");
+        info!("BTE awaiting Tard");
         let mut is_running = true;
-        let t = r_u.recv().unwrap();
-        debug!("BTE recieved Tard");
+        let mut t = r_u.recv().unwrap();
+        info!("BTE recieved Tard");
         let device = t.devices()
                       .into_iter()
                       .next()
@@ -230,11 +236,17 @@ fn start_batched_tard_eval_server<G:GameState>(
         const BATCH_SIZE: usize = 32;
         let mut q = VecDeque::<EvalRequest<G>>::new();
         while is_running{    
+            // Check for Tard updates
+            trace!("BTE Recieve checking for Tard Updates");
+            //let (t_updated, recv_connected) = check_for_model_update(r_u.clone(), t);
+            //t = t_updated;
+            //is_running &= recv_connected;
+
             // Perform batch requests
             let (n, recv_connected) = read_queue(&r_e, &mut q);
             trace!("Added {} elements to BTE queue", n);
             is_running &= recv_connected;
-            if q.len() > 0{
+            while q.len() > 0{
                 let batch_size = std::cmp::min(q.len(), BATCH_SIZE);
                 trace!{"Computing BTE batch of size {}", batch_size};
                 let b_tens = batch_eval_tensor(&q, &device, batch_size);
@@ -267,7 +279,7 @@ fn start_batched_tard_eval_server<G:GameState>(
                 q.drain(0..batch_size);
             }
         }
-        debug!("BatchedTardEvaluator receiver thread end");
+        debug!("BatchedTardEvaluator server shutting down");
     });
 }
 
