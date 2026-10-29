@@ -88,7 +88,7 @@ fn train_tard(){
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
-    let eval_srv = BatchedTardEvalServer::default();
+    let eval_srv = CBatchedTardEvalServer::default();
     eval_srv.update(&tard);
     let (s_games, r_games) = crossbeam::channel::bounded(4096);
     let handles = spawn_workers::<PenteState>(
@@ -168,7 +168,7 @@ fn train_tard(){
 fn spawn_workers <G:GameState>(
     n_workers: usize,
     s: Sender<Vec<SelfPlayElement<G>>>,
-    eval_srv: &impl EvalServer<G>,
+    eval_srv: &impl Server<G>,
     n_rollouts: usize,
     dhp: DirichletHParams) -> Vec<thread::JoinHandle<()>>
 {
@@ -186,7 +186,7 @@ fn spawn_workers <G:GameState>(
 fn start_worker<G:GameState>(
     thread_id: usize,
     s: Sender<Vec<SelfPlayElement<G>>>,
-    eval: EvalClient<G>,
+    eval: impl Evaluator<G>,
     n_rollouts: usize,
     dhp: DirichletHParams) -> JoinHandle<()>
 {    

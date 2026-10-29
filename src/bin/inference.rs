@@ -57,7 +57,8 @@ fn main(){
         if g.is_terminal(){
             break;
         }
-
+        info!("\n{}", g);
+        
         // computer move
         let player: &str = g.active_plyr_str();
         info!("Computing thinking of move for {player}");
