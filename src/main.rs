@@ -69,9 +69,9 @@ fn train_tard(){
     let n_worker_threads = 1000;
     let n_rollouts = 200;
     let n_elements_per_train = 1024;   
-    let n_training_steps_per_iter = 16;
+    let n_training_steps_per_iter = 16; // aim for data re-use of ~2.
     let batch_size = 128;
-    let train_mem_capacity: usize = 30000;
+    let train_mem_capacity: usize = 50000;
     let dirchlet_hyper_params = DirichletHParams::from_gamestate::<PenteState>();
 
 

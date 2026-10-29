@@ -414,7 +414,7 @@ fn add_dirichlet_noise(mut p: Vec<f32>, dhp: &DirichletHParams) -> Vec<f32>{
     let mut rng = rand::rng();
     let noise = dirichlet.sample(&mut rng);
     for i in 0..p.len(){
-        p[i] = dhp.epsilon * p[i] + (1.0 - dhp.epsilon) * noise[i];
+        p[i] = (1.0 -dhp.epsilon) * p[i] + dhp.epsilon * noise[i];
     }
     return p;
 
