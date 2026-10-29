@@ -55,7 +55,7 @@ use crate::tard::*;
 fn main(){
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=info".parse().unwrap());
+    filter = filter.add_directive("pentard=debug".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
@@ -66,7 +66,7 @@ fn train_tard(){
     ///// Configs ////////////
     // generally higher is better, even if way more than number of cores
     // Results in larger batches sent to gpu increasing efficiency.
-    let n_worker_threads = 1000;
+    let n_worker_threads = 1;
     let n_rollouts = 200;
     let n_elements_per_train = 1024;   
     let n_training_steps_per_iter = 16;
@@ -88,8 +88,9 @@ fn train_tard(){
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
-    let eval_srv = CBatchedTardEvalServer::default();
-    eval_srv.update(&tard);
+    let eval_srv = DTardServer::new(&tard);
+    //let eval_srv = CBatchedTardEvalServer::new(&tard);
+    
     let (s_games, r_games) = crossbeam::channel::bounded(4096);
     let handles = spawn_workers::<PenteState>(
         n_worker_threads,
@@ -168,7 +169,7 @@ fn train_tard(){
 fn spawn_workers <G:GameState>(
     n_workers: usize,
     s: Sender<Vec<SelfPlayElement<G>>>,
-    eval_srv: &impl Server<G>,
+    eval_srv: &impl TardServer<G>,
     n_rollouts: usize,
     dhp: DirichletHParams) -> Vec<thread::JoinHandle<()>>
 {

@@ -35,10 +35,7 @@ pub trait Evaluator <G: GameState>: 'static + Send + Clone{
 #[derive(Clone)]
 pub struct NullEvaluator{}
 
-impl <G> Evaluator<G> for NullEvaluator
-where 
-    G:GameState
-{
+impl <G:GameState> Evaluator<G> for NullEvaluator{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
         let p = vec![1.0; G::ACTN_SPC_SIZE];
         return (legalize_policy(p, g), 0.0);
@@ -84,9 +81,10 @@ impl <G:GameState> Evaluator<G> for TardEvaluator{
 //////////////////////////////////////////////////////////////////////////
 // Covers the centralized and decentralized evaluators
 
-pub trait Server<G: GameState>{
+pub trait TardServer<G: GameState>{
     type ClientType: Evaluator<G>;
     fn get_client(&self) -> Self::ClientType;
+    fn update(&self, t: &Tard);
 }
 
 
@@ -125,11 +123,15 @@ pub struct CNullEvalServer<G>{
     s_eval:  Sender<EvalRequest<G>>
 }
 
-impl <G: GameState> Server<G> for CNullEvalServer<G>{
+impl <G: GameState> TardServer<G> for CNullEvalServer<G>{
     type ClientType = CEvalClient<G>;
 
     fn get_client(&self) -> CEvalClient<G>{
         return CEvalClient{s_eval: self.s_eval.clone()};
+    }
+
+    fn update(&self, t: &Tard) {
+        // Do nothing
     }
 }
 
@@ -162,28 +164,21 @@ pub struct CTardEvalServer<G>{
     s_eval:  Sender<EvalRequest<G>>
 }
 
-impl <G> CTardEvalServer<G>{
-    pub fn update(&self, t: Tard){
-        let eval = TardEvaluator::new(&t);
-        self.s_update.send(eval).unwrap();
-    }
-}
 
-impl <G:GameState> Server<G> for CTardEvalServer<G>
-where
-    G: 'static + Send + Clone
-{
+impl <G:GameState> TardServer<G> for CTardEvalServer<G>{
     type ClientType = CEvalClient<G>;
 
     fn get_client(&self) -> CEvalClient<G>{
         return CEvalClient{s_eval: self.s_eval.clone()};
     }
+    
+    fn update(&self, t: &Tard){
+        let eval = TardEvaluator::new(&t.valid());
+        self.s_update.send(eval).unwrap();
+    }
 }
 
-impl <G>Default for CTardEvalServer<G>
-where
-    G: GameState + Send
-{
+impl <G: GameState>Default for CTardEvalServer<G>{
     fn default() -> Self{
         let (s_u, r_u) = crossbeam::channel::unbounded();
         let (s_e, r_e) = crossbeam::channel::unbounded();
@@ -223,42 +218,33 @@ pub struct CBatchedTardEvalServer<G>{
 }
 
 
-impl <G> CBatchedTardEvalServer<G>{
-    pub fn update(&self, t: &Tard){
-        debug!("Sending BTE Server updated tard");
-        match self.s_update.send(t.valid()){
-            Ok(_) => {}
-            Err(_) => {
-                warn!("Send Error when update BTE Server Tard");
-            }
-        }
-    }
-}
-
-
-impl <G:GameState> Server<G> for CBatchedTardEvalServer<G>{
-    type ClientType = CEvalClient<G>;
-    
-    fn get_client(&self) -> CEvalClient<G>{
-        return CEvalClient{s_eval: self.s_eval.clone()};
-    }
-}
-
-
-impl <G>Default for CBatchedTardEvalServer<G>
-where
-    G: GameState + Send
-{
-    fn default() -> Self{
+impl <G:GameState> CBatchedTardEvalServer<G>{
+    pub fn new(t: &Tard) -> Self{
         let (s_u, r_u) = crossbeam::channel::unbounded();
         let (s_e, r_e) = crossbeam::channel::unbounded();
         thread::spawn(move ||{
             start_batched_tard_eval_server(r_u, r_e)
         });
-        Self {
+        let slf = Self {
             s_update: s_u,
             s_eval: s_e
-        }
+        };
+        slf.update(t);
+        return slf;
+    }
+}
+
+
+impl <G:GameState> TardServer<G> for CBatchedTardEvalServer<G>{
+    type ClientType = CEvalClient<G>;
+    
+    fn get_client(&self) -> CEvalClient<G>{
+        return CEvalClient{s_eval: self.s_eval.clone()};
+    }
+    
+    fn update(&self, t: &Tard){
+        info!("Sending BTE Server updated tard");
+        self.s_update.send(t.valid()).unwrap();
     }
 }
 
@@ -428,105 +414,96 @@ struct EvalRequest<G>{
 //
 ////////////////////////////////////////////////////////////////////
 // This architecture features individual (decentralized) evaluator servers
-// each capable of performing evaluations. These evaluators receive updates
-// from the "decentralized server".
+// each capable of performing evaluations. These evaluators still receive
+// updates to the evaluator from the centralized DServer.
 
 
 #[derive(Clone)]
-struct DEvalClient<E>{
-    eval: Option<E>,
-    r_update: Receiver<E>
+pub struct DEvalClient{
+    eval: TardEvaluator,
+    r_update: Receiver<Tard>
 }
 
 
-impl <E, G> Evaluator<G> for DEvalClient<E>
-where 
-    G: GameState,
-    E: Evaluator<G>,
-{
+impl <G:GameState> Evaluator<G> for DEvalClient{
     fn evaluate (&self, g: &G) -> (Vec<f32>, f32) {
-        match &self.eval {
-            Some(e) => {
-                e.evaluate(g)
-            }
-            None => { 
-                NullEvaluator{}.evaluate(g)
-            }
-        }
+        return self.eval.evaluate(g);
     }
 }
 
 
-struct DTardServer <E, G>{
-    s_update: Sender<E>,    // input
-    s_cli: Sender<ReceiverRequest<E>>,
-    
+pub struct DTardServer <G>{
+    s_update: Sender<Tard>,    // input
+    s_cli: Sender<NewClientRequest>,
     _marker: PhantomData<G>,
 }
 
 
-impl <E, G> DTardServer<E,G>
-where 
-    E: 'static + Send + Clone
-{
-    pub fn new(&self) -> Self{
+impl <G:GameState> DTardServer<G>{
+    pub fn new(t: &Tard) -> Self{
         let (s_u, r_u) = crossbeam::channel::unbounded();
         let (s_cli, r_cli) = crossbeam::channel::unbounded();
-        start_dtard_server(r_u, r_cli);
+        start_dtard_server(r_u, r_cli, t.valid());
         Self {
             s_update: s_u,
             s_cli: s_cli,
             _marker: PhantomData::<G>,
         }
-        
     }
 }
 
-impl <E, G> Server<G> for DTardServer<E, G>
-where 
-    G:GameState,
-    E:Evaluator<G>
-{
-    type ClientType = DEvalClient<E>;
+impl <G:GameState> TardServer<G> for DTardServer<G>{
+    type ClientType = DEvalClient;
+
     fn get_client(&self) -> Self::ClientType {
         let (s_resp, r_resp) = crossbeam::channel::bounded(1);
-        let r_req = ReceiverRequest{
+        let r_req = NewClientRequest{
             resp_chan: s_resp,
         };
         self.s_cli.send(r_req).unwrap();
-        let r_cli = r_resp.recv().unwrap();
+        let resp = r_resp.recv().unwrap();
         let cli = DEvalClient{
-            eval:None,
-            r_update: r_cli,
+            eval: TardEvaluator::new(&resp.t),
+            r_update: resp.r,
         };
         return cli;
+    }
+
+    fn update(&self, t: &Tard){
+        self.s_update.send(t.valid()).unwrap();
     }
 }
 
 // FML I hate this. TODO maybe come back and fix later lol.
-fn start_dtard_server<E>(
-    r_u: Receiver<E>,
-    r_cli: Receiver<ReceiverRequest<E>>)
-where 
-    E: 'static + Send + Clone
-{
+fn start_dtard_server(
+    r_u: Receiver<Tard>,
+    r_cli: Receiver<NewClientRequest>,
+    tard: Tard){
     thread::spawn(move||{ 
-        let mut v: Vec<Sender<E>> = Vec::new();
+        info!("DTS thread starting");
+        let mut t = tard;
+        let mut v: Vec<Sender<Tard>> = Vec::new();
         loop{
             crossbeam::channel::select! { // Perform blocking read on two channels at once
                 // broadcast update to all clients
                 recv(r_u) -> msg =>{
-                    let e = msg.unwrap();
+                    info!("DTS Recieved evaluator update...Broadcasting to all {} DClients", v.len());
+                    t = msg.unwrap();
                     for s in v.iter(){
-                        s.send(e.clone()).unwrap();
+                        s.send(t.clone()).unwrap();
                     }
                 }
                 
                 // Create new client channel. Keep sender, return reciever
                 recv(r_cli)-> msg =>{
+                    info!("DTS Recived new client request");
                     let req = msg.unwrap();
                     let (s,r) = crossbeam::channel::unbounded();
-                    req.resp_chan.send(r).unwrap();
+                    let resp = NewClientResponse{
+                        r: r,
+                        t: t.clone(),
+                    };
+                    req.resp_chan.send(resp).unwrap();
                     v.push(s);
                 }
             }
@@ -534,8 +511,14 @@ where
     });
 }
 
-struct ReceiverRequest<E>{
-    resp_chan: Sender<Receiver<E>>
+struct NewClientRequest{
+    resp_chan: Sender<NewClientResponse>,
+}
+
+
+struct NewClientResponse{
+    r: Receiver<Tard>,
+    t: Tard
 }
 
 
