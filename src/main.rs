@@ -55,7 +55,7 @@ use crate::tard::*;
 fn main(){
     let mut filter = EnvFilter::from_default_env()
         .add_directive(LevelFilter::WARN.into());
-    filter = filter.add_directive("pentard=debug".parse().unwrap());
+    filter = filter.add_directive("pentard=info".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .init();
@@ -66,7 +66,7 @@ fn train_tard(){
     ///// Configs ////////////
     // generally higher is better, even if way more than number of cores
     // Results in larger batches sent to gpu increasing efficiency.
-    let n_worker_threads = 1;
+    let n_worker_threads = 1000;
     let n_rollouts = 200;
     let n_elements_per_train = 1024;   
     let n_training_steps_per_iter = 16;
@@ -88,8 +88,7 @@ fn train_tard(){
     let mut opt = AdamConfig::new().init();
     let mut trn_buf = tard::TrainingBuffer::new(train_mem_capacity);
 
-    let eval_srv = DTardServer::new(&tard);
-    //let eval_srv = CBatchedTardEvalServer::new(&tard);
+    let eval_srv = CBatchedTardEvalServer::new(&tard);
     
     let (s_games, r_games) = crossbeam::channel::bounded(4096);
     let handles = spawn_workers::<PenteState>(
@@ -187,7 +186,7 @@ fn spawn_workers <G:GameState>(
 fn start_worker<G:GameState>(
     thread_id: usize,
     s: Sender<Vec<SelfPlayElement<G>>>,
-    eval: impl Evaluator<G>,
+    mut eval: impl Evaluator<G>,
     n_rollouts: usize,
     dhp: DirichletHParams) -> JoinHandle<()>
 {    
@@ -196,7 +195,7 @@ fn start_worker<G:GameState>(
         let mut is_running = true;
         let mut self_play_count = 0;
         while is_running{
-            let game_data = run_self_play::<G>(&eval, n_rollouts, &dhp);
+            let game_data = run_self_play::<G>(&mut eval, n_rollouts, &dhp);
             debug!("Worker thread #{} Self play game {} complete.", thread_id, self_play_count);
             debug!("Worker thread #{} adding {} training elements", thread_id, game_data.len());
             match s.send(game_data){

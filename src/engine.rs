@@ -17,7 +17,7 @@ use crate::utils::{legalize_policy, normalize};
 
 pub fn inference <G: GameState>(
     g: &G,
-    eval: &impl Evaluator<G>,
+    eval: &mut impl Evaluator<G>,
     num_rollouts: usize) -> (Action, f32)
 {   
     let dhp = DirichletHParams::default();
@@ -32,7 +32,7 @@ pub fn inference <G: GameState>(
 
 
 pub fn run_self_play <G: GameState>(
-    eval: &impl Evaluator<G>,
+    eval: &mut impl Evaluator<G>,
     num_sims: usize,
     dhp: &DirichletHParams,
 ) -> Vec<SelfPlayElement<G>>{
@@ -84,7 +84,7 @@ pub struct SelfPlayElement<G:GameState>{
 // Returns log probabiltiy posterior.
 pub fn mcts <G: GameState> (
     state: &G,
-    eval: &impl Evaluator<G>,
+    eval: &mut impl Evaluator<G>,
     num_sims: usize,
     dhp: &DirichletHParams,
 ) -> (Vec<f32>, f32){
@@ -111,7 +111,7 @@ fn mcts_sim <G:GameState>
 (
     tree: &mut MctsTree,
     state_orig: &G,
-    eval: &impl Evaluator<G>,
+    eval: &mut impl Evaluator<G>,
     dhp: &DirichletHParams,
 ){
     let mut state = state_orig.clone();
@@ -312,7 +312,7 @@ impl MctsTree{
         &mut self,
         node_id:NodeId,
         state: &G,
-        eval: &impl Evaluator<G>,
+        eval: &mut impl Evaluator<G>,
         dhp: &DirichletHParams,
     ) -> f32{
         debug_assert_eq!(state.is_terminal(), false);
