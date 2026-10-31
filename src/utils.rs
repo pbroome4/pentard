@@ -2,11 +2,14 @@ use std::path::{Path, PathBuf};
 use tracing::{trace, debug, info};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use burn::tensor::{Tensor,Device,TensorData};
+use burn::tensor::{Tensor, Device,TensorData};
+use burn::store::{ModuleRecord, RecordError};
+use burn::module::Module;
 
 use crate::gamestate::GameState;
-use crate::tard::TrainingElement;
+use crate::tard::{Tard, TrainingElement};
 use crate::engine::SelfPlayElement;
+use crate::pente::PenteState;
 
 #[derive(Debug)]
 pub struct OutputManager{
@@ -112,11 +115,27 @@ pub fn legalize_policy(mut p: Vec<f32>, g: &impl GameState) -> Vec<f32>{
 
 
 // normalizes probability vector to 1.0.
-// Assumes sim is non-zero and that each element >=0
+// Assumes sum is non-zero and that each element >=0
 pub fn normalize(mut v: Vec<f32>) -> Vec<f32> {
     let sum:f32 = v.iter().sum();
     for e in v.iter_mut(){
         *e = *e/sum;
     }
     return v;
+}
+
+
+pub fn load_model(p: &Path, device: &Device) -> Result<Tard, RecordError>{
+    let mut tard = Tard::new(PenteState::N_CHAN,
+                             PenteState::ROWS,
+                             PenteState::COLS,
+                             PenteState::ACTN_SPC_SIZE,
+                             &device);
+    let model_file = "model.bpk";
+    info!("Loading model record: {}", model_file);
+    let record = ModuleRecord::load(model_file)?;
+    info!("Loading record into tard");
+    tard = tard.load_record(record);
+    info!("Tard model loaded");
+    return Ok(tard);
 }

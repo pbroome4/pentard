@@ -8,6 +8,7 @@ use tracing_subscriber::filter::{LevelFilter, EnvFilter};
 use burn::tensor::{Device};
 use burn::optim::{AdamConfig, GradientsParams};
 use crossbeam::channel::{Receiver, RecvError, SendError, Sender};
+use std::path::{Path};
 
 mod tard;
 mod gamestate;
@@ -64,25 +65,30 @@ fn main(){
 
 fn train_tard(){
     ///// Configs ////////////
-    // generally higher is better, even if way more than number of cores
-    // Results in larger batches sent to gpu increasing efficiency.
-    let n_worker_threads = 1000;
+    let n_worker_threads = 30;
     let n_rollouts = 200;
-    let n_elements_per_train = 1024;   
-    let n_training_steps_per_iter = 16; // aim for data re-use of ~2.
+    let n_elements_per_train = 2048;
+    let first_n_elements_train = 10000;   
+    let n_training_steps_per_iter = 32; // aim for data re-use of ~2.
     let batch_size = 128;
-    let train_mem_capacity: usize = 50000;
+    let train_mem_capacity: usize = 10_000_000; // keep most recent 200k games
     let dirchlet_hyper_params = DirichletHParams::from_gamestate::<PenteState>();
-
+    let learning_rate = 1e-4;
 
     let om = OutputManager::new("output", false).unwrap();
     let device = Device::default().autodiff();
     info!("Using Device: {:?}", device);
-    let mut tard = tard::Tard::new(PenteState::N_CHAN,
-        PenteState::ROWS,
-        PenteState::COLS,
-        PenteState::ACTN_SPC_SIZE,
-        &device);
+    info!("Attempting to load existing model");
+    let mut tard = load_model(Path::new("model.bpk"), &device).unwrap_or_else(|_|{
+        info!("No Tard model found to load, creating fresh instance");
+        tard::Tard::new(
+            PenteState::N_CHAN,
+            PenteState::ROWS,
+            PenteState::COLS,
+            PenteState::ACTN_SPC_SIZE,
+            &device)
+    });
+    
     debug!("{}", tard);
     let mut t_loss: tard::TardLoss = Default::default();
     let mut opt = AdamConfig::new().init();
@@ -99,10 +105,11 @@ fn train_tard(){
         dirchlet_hyper_params);       
     let mut is_running = true;
     let mut epoch = 0;
+    let mut el_cnt_threshold = first_n_elements_train;
     while is_running{
         info!("Sampling Self-Play Games");
         let mut el_cnt = 0;
-        while el_cnt < n_elements_per_train{ 
+        while el_cnt < el_cnt_threshold{ 
             match r_games.recv(){
                 Ok(req) =>{
                     el_cnt += req.len();
@@ -115,8 +122,9 @@ fn train_tard(){
                     break
                 }
             }
-            info!("Read {}/{} game elements for next training loop", el_cnt, n_elements_per_train);
+            info!("Read {}/{} game elements for next training loop", el_cnt, el_cnt_threshold);
         }
+        el_cnt_threshold = n_elements_per_train; // After epoch 0, use this instead
         
         info!("Performing training epoch {}", epoch);
         let mut t_loss = TardLoss::default();
@@ -126,9 +134,10 @@ fn train_tard(){
             debug!("{}", t_loss);
             let grads = t_loss.loss.backward();
             let grad_params = GradientsParams::from_grads(grads, &tard);
-            tard = opt.step(1e-4, tard, grad_params);
+            tard = opt.step(learning_rate, tard, grad_params);
         }
         info!("Training epoch {} complete", epoch);
+        info!("Loss after training: {}", t_loss);
         
         info!("Updating Evaluator Thread");
         eval_srv.update(&tard);
